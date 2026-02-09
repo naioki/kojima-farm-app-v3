@@ -221,6 +221,40 @@ def fetch_ledger_rows(
     return True, msg, rows_out
 
 
+def fetch_ledger_confirmed_dates(
+    spreadsheet_id: str,
+    sheet_name: str = "台帳データ",
+    credentials=None,
+    st_secrets=None,
+) -> Tuple[bool, str, List[str]]:
+    """
+    台帳シートの「確定」行から、納品日付の一覧を重複なしで取得する。
+    返す日付は YYYY/MM/DD 形式で、新しい順（降順）にソート済み。
+    Returns: (成功可否, メッセージ, 日付文字列のリスト)
+    """
+    ok, msg, rows = fetch_ledger_rows(
+        spreadsheet_id,
+        sheet_name=sheet_name,
+        only_unconfirmed=False,
+        only_confirmed=True,
+        delivery_date_from=None,
+        delivery_date_to=None,
+        credentials=credentials,
+        st_secrets=st_secrets,
+    )
+    if not ok or not rows:
+        return ok, msg, []
+    seen: set = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        d = (row.get("納品日付") or "").strip().replace("-", "/")
+        if d:
+            seen.add(d)
+    out = sorted(seen, reverse=True)
+    return True, f"確定データの納品日付 {len(out)} 件（新しい順）", out
+
+
 def update_ledger_row_by_id(
     spreadsheet_id: str,
     sheet_name: str,
