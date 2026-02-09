@@ -28,7 +28,7 @@ def test_v2_result_to_delivery_rows():
     rows = v2_result_to_delivery_rows(v2_data, "2023-10-01")
     assert len(rows) == 1
     row = rows[0]
-    assert row["纳品日付"] == "2023/10/01"
+    assert row["納品日付"] == "2023/10/01"
     assert row["納品先"] == "Store A"
     assert row["品目"] == "Item 1"
     assert row["規格"] == "Spec 1"

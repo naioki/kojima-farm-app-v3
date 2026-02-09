@@ -30,7 +30,8 @@ from delivery_converter import v2_result_to_delivery_rows, v2_result_to_ledger_r
 from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, is_sheet_configured
 from order_processing import (
     safe_int,
-    parse_order_image, parse_order_text, validate_and_fix_order_data
+    parse_order_image, parse_order_text, validate_and_fix_order_data,
+    normalize_item_name, validate_store_name
 )
 
 # 台帳スプレッドシートのデフォルトID（Secretsに未設定の場合に使用）
@@ -218,7 +219,7 @@ with tab1:
     uploaded_file = st.file_uploader("注文画像をアップロード", type=['png', 'jpg', 'jpeg'])
     if uploaded_file:
         image = Image.open(uploaded_file)
-        st.image(image, caption="アップロード画像", use_container_width=True)
+        st.image(image, caption="アップロード画像", width="stretch")
         if st.session_state.image_uploaded != uploaded_file.name:
             st.session_state.parsed_data = None
             st.session_state.labels = []
@@ -368,11 +369,11 @@ with tab3:
         except Exception:
             pass
         ledger_id = st.text_input("台帳のスプレッドシートID", value=_sid_ledger or DEFAULT_LEDGER_SPREADSHEET_ID, placeholder="URLの /d/ と /edit の間の文字列", key="ledger_fetch_id")
-        ledger_sheet_fetch = st.text_input("シート名", value="シート1", key="ledger_fetch_sheet")
+        ledger_sheet_fetch = st.text_input("シート名", value="台帳データ", key="ledger_fetch_sheet")
         if st.button("未確定一覧を取得", key="fetch_unconfirmed_btn"):
             sid_stripped = (ledger_id or "").strip()
             if sid_stripped:
-                ok, msg, rows = fetch_ledger_rows(sid_stripped, sheet_name=(ledger_sheet_fetch or "シート1").strip() or "シート1", only_unconfirmed=True, st_secrets=secrets_obj)
+                ok, msg, rows = fetch_ledger_rows(sid_stripped, sheet_name=(ledger_sheet_fetch or "台帳データ").strip() or "台帳データ", only_unconfirmed=True, st_secrets=secrets_obj)
                 if ok:
                     st.success(msg)
                     st.session_state.ledger_unconfirmed_rows = rows
@@ -390,7 +391,7 @@ with tab3:
             # 編集用設定
             edited_df = st.data_editor(
                 df_unconf,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "納品日付": st.column_config.TextColumn("納品日付", disabled=True),
@@ -409,7 +410,7 @@ with tab3:
 
             if st.button("💾 変更を保存 (スプレッドシートに反映)", type="primary", key="save_ledger_changes_btn"):
                 sid_stripped = (ledger_id or "").strip()
-                sheet_name_s = (ledger_sheet_fetch or "シート1").strip() or "シート1"
+                sheet_name_s = (ledger_sheet_fetch or "台帳データ").strip() or "台帳データ"
                 
                 if not sid_stripped:
                     st.error("スプレッドシートIDが設定されていません。")
@@ -460,7 +461,7 @@ with tab3:
                         old_check = orig.get("チェック")
                         # Normalize check to boolean-like comparison if needed, or just string
                         if str(new_check) != str(old_check):
-                             updates["チェック"] = new_check
+                            updates["チェック"] = new_check
 
                         if updates:
                             ok, msg = update_ledger_row_by_id(sid_stripped, sheet_name_s, did, updates, st_secrets=secrets_obj)
@@ -495,14 +496,14 @@ with tab4:
         secrets_obj_pdf = None
     if is_sheet_configured(secrets_obj_pdf):
         ledger_id_pdf = st.text_input("台帳のスプレッドシートID", value=DEFAULT_LEDGER_SPREADSHEET_ID, key="ledger_pdf_id")
-        ledger_sheet_pdf = st.text_input("シート名", value="シート1", key="ledger_pdf_sheet")
+        ledger_sheet_pdf = st.text_input("シート名", value="台帳データ", key="ledger_pdf_sheet")
         
         # Date selection improvement
         default_date = datetime.now().date()
         try:
             if st.session_state.get("shipment_date"):
                 default_date = datetime.strptime(st.session_state.get("shipment_date"), "%Y-%m-%d").date()
-        except:
+        except (ValueError, TypeError):
             pass
             
         pdf_date_input = st.date_input("納品日付（確定データの対象日）", value=default_date, key="pdf_ledger_date_picker")
@@ -514,7 +515,7 @@ with tab4:
                 if ok:
                     st.success(msg)
                     if rows:
-                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
                         st.session_state.ledger_confirmed_for_pdf = rows
                     else:
                         st.info("該当する確定データがありません。")
@@ -634,7 +635,7 @@ with tab5:
             master_rows.append({"品目": name, "1コンテナあたりの入数": u, "単位": t, "受信方法": "箱数" if as_boxes else "総数"})
         if master_rows:
             df_master = pd.DataFrame(master_rows)
-            edited_master = st.data_editor(df_master, use_container_width=True, hide_index=True,
+            edited_master = st.data_editor(df_master, width="stretch", hide_index=True,
                 column_config={"品目": st.column_config.TextColumn("品目", disabled=True), "1コンテナあたりの入数": st.column_config.NumberColumn("1コンテナあたりの入数", min_value=1, step=1), "単位": st.column_config.SelectboxColumn("単位", options=["袋", "本"], required=True), "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True)})
             if st.button("💾 マスターデータを保存", key="save_master_btn", type="primary"):
                 for _, row in edited_master.iterrows():
@@ -720,7 +721,7 @@ if st.session_state.parsed_data:
         total_quantity = (unit * boxes) + remainder
         df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': entry.get('spec', ''), '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
-    edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic",
+    edited_df = st.data_editor(df, width="stretch", num_rows="dynamic",
         column_config={'店舗名': st.column_config.SelectboxColumn('店舗名', options=load_stores(), required=True), '品目': st.column_config.TextColumn('品目', required=True), '規格': st.column_config.TextColumn('規格'), '入数(unit)': st.column_config.NumberColumn('入数(unit)', min_value=0, step=1), '箱数(boxes)': st.column_config.NumberColumn('箱数(boxes)', min_value=0, step=1), '端数(remainder)': st.column_config.NumberColumn('端数(remainder)', min_value=0, step=1), '合計数量': st.column_config.NumberColumn('合計数量', disabled=True)})
     edited_df['合計数量'] = edited_df['入数(unit)'] * edited_df['箱数(boxes)'] + edited_df['端数(remainder)']
     df_for_compare = df.drop(columns=['合計数量'])
@@ -760,7 +761,7 @@ if st.session_state.parsed_data:
             st.warning(f"変換エラー: {e}")
     if delivery_rows:
         df_delivery = pd.DataFrame(delivery_rows)
-        st.dataframe(df_delivery, use_container_width=True, hide_index=True)
+        st.dataframe(df_delivery, width="stretch", hide_index=True)
         csv_bytes = df_delivery.to_csv(index=False, encoding="utf-8-sig")
         safe_date = (d_date or "").replace("/", "-").replace("\\", "-").strip() or "export"
         st.download_button("📥 納品データをCSVでダウンロード", data=csv_bytes, file_name=f"納品データ_{safe_date}.csv", mime="text/csv", key="csv_delivery_btn")
@@ -777,7 +778,7 @@ if st.session_state.parsed_data:
             except Exception:
                 pass
             sheet_id = st.text_input("スプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, placeholder="URLの /d/ と /edit の間の文字列", key="delivery_sheet_id")
-            ledger_sheet_name = st.text_input("台帳シート名（台帳用の場合）", value="シート1", placeholder="例: シート1 または 台帳データ", key="ledger_sheet_name")
+            ledger_sheet_name = st.text_input("台帳シート名（台帳用の場合）", value="台帳データ", placeholder="例: シート1 または 台帳データ", key="ledger_sheet_name")
             col_append1, col_append2 = st.columns(2)
             with col_append1:
                 if st.button("📤 納品データシートに追記", key="append_sheet_btn"):
