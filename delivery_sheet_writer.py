@@ -120,7 +120,9 @@ def append_ledger_rows(
         workbook = client.open_by_key(sid)
         sheet = workbook.worksheet(sheet_name_s)
     except Exception as e:
-        return False, f"スプレッドシートの取得に失敗しました: {str(e).strip() or '不明なエラー'}"
+        import traceback
+        traceback.print_exc()
+        return False, f"スプレッドシートの取得に失敗しました: {repr(e)}"
     data = []
     for row in rows:
         if not isinstance(row, dict):
