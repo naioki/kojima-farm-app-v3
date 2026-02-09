@@ -34,22 +34,23 @@
    - Main file path: `app.py`
 3. **Advanced settings** を開きます（ここが重要です）。
 
-### 2.1. Secrets (環境変数) の設定
-ローカルの `.streamlit/secrets.toml` の内容を、Streamlit Cloudの **Secrets** 入力欄にコピー＆ペーストします。
+### 2.2. Secrets (環境変数) の自動生成ツール
+手動での設定が難しい場合、以下のコマンドで必要なテキストを自動生成できます。
 
-必要なキー:
-- `GEMINI_API_KEY`: Google Gemini APIキー
-- `[gcp]`: Google Sheets API認証情報（SERVICE_ACCOUNT_JSONの中身など）
-- `[email]`: メール設定（imap_server, email_address など）
+```bash
+python show_cloud_secrets.py
+```
+（上のコマンドを実行して表示された内容をコピー＆ペーストしてください）
 
-例:
+または、手動で以下のように記述します:
 ```toml
 GEMINI_API_KEY = "your-api-key"
 
 [email]
-email_address = "your-email@gmail.com"
+email_address = "あなたのGmailアドレス (例: example@gmail.com)"
 imap_server = "imap.gmail.com"
-sender_email = "order@example.com"
+sender_email = "注文メールの送信元アドレス (空欄でも可)"
+# password = "アプリパスワード" # Streamlit CloudのSecretsにはパスワードを保存せず、アプリ画面で入力するのが安全です
 
 [gcp]
 type = "service_account"

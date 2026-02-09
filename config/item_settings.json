@@ -1,0 +1,37 @@
+{
+  "胡瓜": {
+    "default_unit": 30,
+    "unit_type": "袋",
+    "receive_as_boxes": false
+  },
+  "胡瓜平箱": {
+    "default_unit": 30,
+    "unit_type": "袋",
+    "receive_as_boxes": true
+  },
+  "胡瓜バラ": {
+    "default_unit": 100,
+    "unit_type": "本",
+    "receive_as_boxes": false
+  },
+  "長ネギ": {
+    "default_unit": 50,
+    "unit_type": "本",
+    "receive_as_boxes": false
+  },
+  "長ねぎバラ": {
+    "default_unit": 50,
+    "unit_type": "本",
+    "receive_as_boxes": false
+  },
+  "春菊": {
+    "default_unit": 30,
+    "unit_type": "袋",
+    "receive_as_boxes": false
+  },
+  "青梗菜": {
+    "default_unit": 20,
+    "unit_type": "袋",
+    "receive_as_boxes": false
+  }
+}
