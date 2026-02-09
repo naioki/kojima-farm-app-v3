@@ -185,7 +185,7 @@ def generate_line_summary(order_data: list) -> str:
 
 
 st.title("📦 出荷ラベル生成アプリ")
-st.markdown("FAX注文書画像をアップロードして、店舗ごとの出荷ラベルPDFを生成します。")
+st.caption("画像アップロード・メール取得 → 解析・編集 → 納品データ・台帳連携・PDF生成まで一括で対応します。")
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📸 画像解析", "📧 メール自動読み取り", "📋 未確定一覧", "📄 台帳からPDF", "⚙️ 設定管理"])
 
 with st.sidebar:
@@ -208,8 +208,8 @@ with st.sidebar:
     shipment_date = st.date_input("出荷日を選択", value=datetime.strptime(st.session_state.shipment_date, '%Y-%m-%d').date())
     st.session_state.shipment_date = shipment_date.strftime('%Y-%m-%d')
     st.markdown("---")
-    st.markdown("### 📋 使い方")
-    st.markdown("1. APIキーを設定 2. 出荷日を選択 3. 画像をアップロード or メールから取得 4. 解析結果を確認・修正 5. PDFを生成")
+    with st.expander("📋 使い方", expanded=False):
+        st.markdown("1. APIキーを設定  \n2. 出荷日を選択  \n3. 画像をアップロード or メールから取得  \n4. 解析結果を確認・修正  \n5. PDFを生成")
 
 if not api_key:
     st.warning("⚠️ サイドバーでGemini APIキーを入力してください。")
@@ -511,7 +511,7 @@ with tab4:
         if st.button("確定済みデータを取得", key="fetch_confirmed_btn"):
             sid = (ledger_id_pdf or "").strip()
             if sid and (pdf_delivery_date or "").strip():
-                ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_pdf or "シート1").strip() or "シート1", only_unconfirmed=False, only_confirmed=True, delivery_date_from=(pdf_delivery_date or "").strip(), delivery_date_to=(pdf_delivery_date or "").strip(), st_secrets=secrets_obj_pdf)
+                ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_pdf or "台帳データ").strip() or "台帳データ", only_unconfirmed=False, only_confirmed=True, delivery_date_from=(pdf_delivery_date or "").strip(), delivery_date_to=(pdf_delivery_date or "").strip(), st_secrets=secrets_obj_pdf)
                 if ok:
                     st.success(msg)
                     if rows:
@@ -797,7 +797,7 @@ if st.session_state.parsed_data:
                     if sid_stripped:
                         ledger_rows = v2_result_to_ledger_rows(parsed, delivery_date=d_date or default_delivery, farmer=(farmer_name or "").strip())
                         if ledger_rows:
-                            ok, msg = append_ledger_rows(sid_stripped, ledger_rows, sheet_name=(ledger_sheet_name or "シート1").strip() or "シート1", st_secrets=secrets_obj)
+                            ok, msg = append_ledger_rows(sid_stripped, ledger_rows, sheet_name=(ledger_sheet_name or "台帳データ").strip() or "台帳データ", st_secrets=secrets_obj)
                             if ok:
                                 st.success(msg)
                             else:
