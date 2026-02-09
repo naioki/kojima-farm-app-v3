@@ -66,3 +66,30 @@ def save_email_config(imap_server: str, email_address: str, sender_email: str, d
     config = {"imap_server": imap_server, "email_address": email_address, "sender_email": sender_email, "days_back": days_back}
     with open(EMAIL_CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+SENDER_RULES_FILE = CONFIG_DIR / "sender_rules.json"
+
+def load_sender_rules() -> Dict[str, Dict]:
+    ensure_config_dir()
+    if SENDER_RULES_FILE.exists():
+        try:
+            with open(SENDER_RULES_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_sender_rules(rules: Dict[str, Dict]):
+    ensure_config_dir()
+    with open(SENDER_RULES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(rules, f, ensure_ascii=False, indent=2)
+
+def get_sender_rule(sender: str) -> Optional[Dict]:
+    rules = load_sender_rules()
+    if not sender:
+        return None
+    # Exact match first
+    if sender in rules:
+        return rules[sender]
+    # Domain match? (Not implemented for now, maybe later)
+    return None

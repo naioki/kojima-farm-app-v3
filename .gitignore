@@ -48,3 +48,8 @@ Thumbs.db
 
 # 設定ファイル（ローカルのみ、Streamlit Cloudでは使わない）
 config/email_config.json
+
+# Google Service Account Key
+streamlit-sheets-*.json
+*.json
+!config/*.json

@@ -24,10 +24,17 @@ from config_manager import (
     load_item_settings, save_item_settings, get_item_setting, set_item_setting, set_item_receive_as_boxes, remove_item_setting,
     DEFAULT_ITEM_SETTINGS, get_box_count_items
 )
-from email_config_manager import load_email_config, save_email_config, detect_imap_server
+from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
-from delivery_converter import v2_result_to_delivery_rows
-from delivery_sheet_writer import append_delivery_rows, is_sheet_configured
+from delivery_converter import v2_result_to_delivery_rows, v2_result_to_ledger_rows, ledger_rows_to_v2_format_with_units
+from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, is_sheet_configured
+from order_processing import (
+    safe_int,
+    parse_order_image, parse_order_text, validate_and_fix_order_data
+)
+
+# 台帳スプレッドシートのデフォルトID（Secretsに未設定の場合に使用）
+DEFAULT_LEDGER_SPREADSHEET_ID = "1KJtpiaPjyH2bTaxULWwgemhZTCymfvsZPftfryQzXG4"
 
 # ページ設定
 st.set_page_config(
@@ -75,200 +82,6 @@ if 'default_units_initialized' not in st.session_state:
     if not item_settings:
         save_item_settings(DEFAULT_ITEM_SETTINGS)
     st.session_state.default_units_initialized = True
-
-
-def safe_int(v):
-    if v is None:
-        return 0
-    if isinstance(v, int):
-        return v
-    s = re.sub(r'\D', '', str(v))
-    return int(s) if s else 0
-
-
-def get_known_stores():
-    return load_stores()
-
-
-def get_item_normalization():
-    return load_items()
-
-
-def normalize_item_name(item_name, auto_learn=True):
-    if not item_name:
-        return ""
-    item_name = str(item_name).strip()
-    item_normalization = get_item_normalization()
-    for normalized, variants in item_normalization.items():
-        if item_name in variants or any(variant in item_name for variant in variants):
-            return normalized
-    if auto_learn:
-        return auto_learn_item(item_name)
-    return item_name
-
-
-def validate_store_name(store_name, auto_learn=True):
-    if not store_name:
-        return None
-    store_name = str(store_name).strip()
-    known_stores = get_known_stores()
-    if store_name in known_stores:
-        return store_name
-    for known_store in known_stores:
-        if known_store in store_name or store_name in known_store:
-            return known_store
-    if auto_learn:
-        return auto_learn_store(store_name)
-    return None
-
-
-def parse_order_image(image: Image.Image, api_key: str) -> list:
-    genai.configure(api_key=api_key)
-    try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
-    except Exception:
-        try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
-        except Exception:
-            try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
-            except Exception:
-                try:
-                    model = genai.GenerativeModel('gemini-1.5-pro')
-                except Exception:
-                    model = genai.GenerativeModel('gemini-pro-vision')
-    known_stores = get_known_stores()
-    item_normalization = get_item_normalization()
-    store_list = "、".join(known_stores)
-    item_list = ", ".join(item_normalization.keys())
-    item_settings_for_prompt = load_item_settings()
-    box_count_items = get_box_count_items()
-    unit_lines = "\n".join([f"- {name}: {s.get('default_unit', 0)}{s.get('unit_type', '袋')}/コンテナ" for name, s in sorted(item_settings_for_prompt.items()) if s.get("default_unit", 0) > 0])
-    box_count_str = "、".join(box_count_items) if box_count_items else "（なし）"
-    prompt = f"""
-画像を解析し、以下の厳密なルールに従ってJSONで返してください。
-
-【店舗名リスト（参考）】
-{store_list}
-※上記リストにない店舗名も読み取ってください。
-
-【品目名の正規化ルール】
-{json.dumps(item_normalization, ensure_ascii=False, indent=2)}
-
-【重要ルール】
-1. 店舗名の後に「:」または改行がある場合、その後の行は全てその店舗の注文です
-2. 品目名がない行（例：「50×1」）は、直前の品目の続きとして処理してください
-3. 「/」で区切られた複数の注文は、同じ店舗・同じ品目として統合してください
-4. 「胡瓜バラ」と「胡瓜3本」は別の規格として扱ってください
-5. unit, boxes, remainderには「数字のみ」を入れてください
-
-【計算ルール（事前登録マスターデータ＝1コンテナあたりの入数）】
-{unit_lines}
-
-【最重要：総数 vs 箱数】
-- 「×数字」が総数の品目：boxes = 総数÷unit（切り捨て）, remainder = 総数 - unit×boxes で逆算してください。
-- 「×数字」が箱数の品目（以下のみ）：{box_count_str} → ×数字をそのままboxesにし、unitは上記の値、remainder=0 で出力してください。
-
-【出力JSON形式】
-[{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"boxes":数字,"remainder":数字}}]
-
-必ず全ての店舗と品目を漏れなく読み取ってください。
-"""
-    try:
-        response = model.generate_content([prompt, image])
-        text = response.text.strip()
-        if '```json' in text:
-            text = text.split('```json')[1].split('```')[0].strip()
-        elif '```' in text:
-            parts = text.split('```')
-            for part in parts:
-                if '{' in part and '[' in part:
-                    text = part.strip()
-                    break
-        result = json.loads(text)
-        if isinstance(result, dict):
-            result = [result]
-        return result
-    except json.JSONDecodeError as e:
-        st.error(f"JSON解析エラー: {e}")
-        st.text(f"レスポンス内容: {text[:500]}")
-        return None
-    except Exception as e:
-        st.error(f"画像解析エラー: {e}")
-        return None
-
-
-def validate_and_fix_order_data(order_data, auto_learn=True):
-    if not order_data:
-        return []
-    validated_data = []
-    errors = []
-    learned_stores = []
-    learned_items = []
-    known_stores = get_known_stores()
-    for i, entry in enumerate(order_data):
-        store = entry.get('store', '').strip()
-        item = entry.get('item', '').strip()
-        validated_store = validate_store_name(store, auto_learn=auto_learn)
-        if not validated_store and store:
-            if auto_learn:
-                validated_store = auto_learn_store(store)
-                if validated_store not in learned_stores:
-                    learned_stores.append(validated_store)
-            else:
-                errors.append(f"行{i+1}: 不明な店舗名「{store}」")
-                for known_store in known_stores:
-                    if any(char in store for char in known_store):
-                        validated_store = known_store
-                        break
-        normalized_item = normalize_item_name(item, auto_learn=auto_learn)
-        if not normalized_item and item:
-            if auto_learn:
-                normalized_item = auto_learn_item(item)
-                if normalized_item not in learned_items:
-                    learned_items.append(normalized_item)
-            else:
-                errors.append(f"行{i+1}: 品目名「{item}」を正規化できませんでした")
-        unit = safe_int(entry.get('unit', 0))
-        boxes = safe_int(entry.get('boxes', 0))
-        remainder = safe_int(entry.get('remainder', 0))
-        if unit <= 0:
-            spec_for_lookup = (entry.get('spec') or '').strip() if entry.get('spec') is not None else ''
-            looked_up = lookup_unit(normalized_item or item, spec_for_lookup, validated_store or store)
-            if looked_up > 0:
-                unit = looked_up
-            else:
-                item_setting = get_item_setting(normalized_item or item)
-                default_unit = item_setting.get("default_unit", 0)
-                if default_unit > 0:
-                    unit = default_unit
-        if unit == 0 and boxes == 0 and remainder == 0:
-            errors.append(f"行{i+1}: 数量が全て0です（店舗: {store}, 品目: {item}）")
-        spec_value = entry.get('spec', '')
-        if spec_value is None:
-            spec_value = ''
-        else:
-            spec_value = str(spec_value).strip()
-        if unit > 0:
-            add_unit_if_new(normalized_item or item, spec_value, validated_store or store, unit)
-        validated_data.append({
-            'store': validated_store or store,
-            'item': normalized_item or item,
-            'spec': spec_value,
-            'unit': unit,
-            'boxes': boxes,
-            'remainder': remainder
-        })
-    if auto_learn:
-        if learned_stores:
-            st.success(f"✨ 新しい店舗名を学習しました: {', '.join(learned_stores)}")
-        if learned_items:
-            st.success(f"✨ 新しい品目名を学習しました: {', '.join(learned_items)}")
-    if errors:
-        st.warning("⚠️ 検証で以下の問題が見つかりました:")
-        for error in errors:
-            st.write(f"- {error}")
-    return validated_data
 
 
 def generate_labels_from_data(order_data: list, shipment_date: str) -> list:
@@ -372,7 +185,7 @@ def generate_line_summary(order_data: list) -> str:
 
 st.title("📦 出荷ラベル生成アプリ")
 st.markdown("FAX注文書画像をアップロードして、店舗ごとの出荷ラベルPDFを生成します。")
-tab1, tab2, tab3 = st.tabs(["📸 画像解析", "📧 メール自動読み取り", "⚙️ 設定管理"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📸 画像解析", "📧 メール自動読み取り", "📋 未確定一覧", "📄 台帳からPDF", "⚙️ 設定管理"])
 
 with st.sidebar:
     st.header("⚙️ 設定")
@@ -431,7 +244,7 @@ with tab1:
 
 with tab2:
     st.subheader("📧 メール自動読み取り")
-    st.write("メールから注文画像を自動取得して解析します。")
+    st.write("メールから注文を自動取得して解析します。（画像・テキスト対応）")
     saved_config = st.session_state.email_config
     try:
         if hasattr(st, 'secrets'):
@@ -476,20 +289,57 @@ with tab2:
                 try:
                     with st.spinner('メールをチェック中...'):
                         results = check_email_for_orders(imap_server=imap_server, email_address=email_address, password=email_password, sender_email=sender_email if sender_email else None, days_back=days_back)
+                    
+                    sender_rules = load_sender_rules()
+                    
                     if results:
-                        st.success(f"✅ {len(results)}件のメールから画像を取得しました")
+                        st.success(f"✅ {len(results)}件のデータを受信しました")
                         for idx, result in enumerate(results):
-                            with st.expander(f"📎 {result['filename']} - {result['subject']} ({result['date']})"):
-                                st.image(result['image'], caption=result['filename'], use_container_width=True)
-                                if st.button(f"🔍 この画像を解析", key=f"parse_{idx}"):
-                                    with st.spinner('解析中...'):
-                                        order_data = parse_order_image(result['image'], api_key)
-                                        if order_data:
-                                            validated_data = validate_and_fix_order_data(order_data)
-                                            st.session_state.parsed_data = validated_data
-                                            st.session_state.labels = []
-                                            st.success(f"✅ {len(validated_data)}件のデータを読み取りました")
-                                            st.rerun()
+                            sender_addr = result['from']
+                            rule = sender_rules.get(sender_addr, {}) # Exact match logic for now
+                            # Try to match by email inside "Name <email>" if possible, but exact match is safer first.
+                            # If key not found, try to extract email from "Name <email>" and check again?
+                            # For simplicity, we use what 'from' returns (which might be "Name <email>").
+                            # Ideally email_config_manager should handle fuzzy matching, but let's stick to exact or simple.
+                            # Actually result['from'] is decoded subject which might be full string.
+                            # Let's extract email address if possible.
+                            
+                            rule_mode = rule.get("mode", "image")
+                            
+                            subject_display = f"{result['subject']} ({result['date']})"
+                            with st.expander(f"📎 {result['filename']} - {subject_display}"):
+                                is_image = result.get('image') is not None
+                                body_text = result.get('body_text', '')
+                                
+                                parse_type = "none"
+                                if is_image:
+                                    st.image(result['image'], caption=result['filename'], use_container_width=True)
+                                    parse_type = "image"
+                                elif body_text:
+                                    st.text_area("メール本文", body_text, height=150)
+                                    parse_type = "text"
+                                
+                                label = "🔍 解析を実行"
+                                if parse_type == "image":
+                                    label = "🔍 画像を解析"
+                                elif parse_type == "text":
+                                    label = "🔍 本文を解析"
+                                
+                                if parse_type != "none":
+                                    if st.button(label, key=f"parse_{idx}_{parse_type}"):
+                                        with st.spinner('解析中...'):
+                                            parsed = None
+                                            if parse_type == "image":
+                                                parsed = parse_order_image(result['image'], api_key)
+                                            else:
+                                                parsed = parse_order_text(body_text, sender_addr, result['subject'], api_key)
+                                            
+                                            if parsed:
+                                                validated_data = validate_and_fix_order_data(parsed)
+                                                st.session_state.parsed_data = validated_data
+                                                st.session_state.labels = []
+                                                st.success(f"✅ {len(validated_data)}件のデータを読み取りました")
+                                                st.rerun()
                     else:
                         st.info("新しいメールは見つかりませんでした。")
                 except Exception as e:
@@ -504,7 +354,248 @@ with tab2:
         st.success(f"💾 設定が保存されています: **{saved_config.get('email_address')}**")
 
 with tab3:
+    st.subheader("📋 未確定一覧")
+    st.caption("台帳スプレッドシートから「確定フラグ」が空または「未確定」の行を表示します。取りこぼし・誤解析の確認に使えます。")
+    try:
+        secrets_obj = getattr(st, "secrets", None)
+    except Exception:
+        secrets_obj = None
+    if is_sheet_configured(secrets_obj):
+        _sid_ledger = ""
+        try:
+            if secrets_obj is not None and hasattr(secrets_obj, "get"):
+                _sid_ledger = secrets_obj.get("DELIVERY_SPREADSHEET_ID", "") or getattr(secrets_obj, "DELIVERY_SPREADSHEET_ID", "")
+        except Exception:
+            pass
+        ledger_id = st.text_input("台帳のスプレッドシートID", value=_sid_ledger or DEFAULT_LEDGER_SPREADSHEET_ID, placeholder="URLの /d/ と /edit の間の文字列", key="ledger_fetch_id")
+        ledger_sheet_fetch = st.text_input("シート名", value="シート1", key="ledger_fetch_sheet")
+        if st.button("未確定一覧を取得", key="fetch_unconfirmed_btn"):
+            sid_stripped = (ledger_id or "").strip()
+            if sid_stripped:
+                ok, msg, rows = fetch_ledger_rows(sid_stripped, sheet_name=(ledger_sheet_fetch or "シート1").strip() or "シート1", only_unconfirmed=True, st_secrets=secrets_obj)
+                if ok:
+                    st.success(msg)
+                    st.session_state.ledger_unconfirmed_rows = rows
+                    st.session_state.ledger_fetch_timestamp = datetime.now() # Force refresh trigger
+                else:
+                    st.error(msg)
+            else:
+                st.warning("スプレッドシートIDを入力してください。")
+
+        # 未確定行の表示と編集
+        if st.session_state.get("ledger_unconfirmed_rows"):
+            rows = st.session_state.ledger_unconfirmed_rows
+            df_unconf = pd.DataFrame(rows)
+            
+            # 編集用設定
+            edited_df = st.data_editor(
+                df_unconf,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "納品日付": st.column_config.TextColumn("納品日付", disabled=True),
+                    "納品先": st.column_config.TextColumn("納品先", disabled=True),
+                    "品目": st.column_config.TextColumn("品目", disabled=True),
+                    "規格": st.column_config.TextColumn("規格", disabled=True),
+                    "数量": st.column_config.NumberColumn("数量", min_value=0, step=1, required=True),
+                    "農家": st.column_config.TextColumn("農家"),
+                    "確定フラグ": st.column_config.SelectboxColumn("確定フラグ", options=["未確定", "確定"], required=True),
+                    "確定日時": st.column_config.TextColumn("確定日時", disabled=True),
+                    "チェック": st.column_config.CheckboxColumn("チェック"),
+                    "納品ID": st.column_config.TextColumn("納品ID", disabled=True),
+                },
+                key="ledger_editor"
+            )
+
+            if st.button("💾 変更を保存 (スプレッドシートに反映)", type="primary", key="save_ledger_changes_btn"):
+                sid_stripped = (ledger_id or "").strip()
+                sheet_name_s = (ledger_sheet_fetch or "シート1").strip() or "シート1"
+                
+                if not sid_stripped:
+                    st.error("スプレッドシートIDが設定されていません。")
+                else:
+                    updated_count = 0
+                    errors = []
+                    
+                    # Original rows for comparison (keyed by delivery ID)
+                    original_map = {r.get("納品ID"): r for r in rows}
+                    
+                    for index, row in edited_df.iterrows():
+                        did = row.get("納品ID")
+                        if not did:
+                            continue
+                        
+                        orig = original_map.get(did)
+                        if not orig:
+                            continue
+                        
+                        updates = {}
+                        # Check for changes in specific columns
+                        # Quantity
+                        try:
+                            new_qty = int(row.get("数量", 0))
+                            old_qty = int(orig.get("数量", 0)) if orig.get("数量") else 0
+                            if new_qty != old_qty:
+                                updates["数量"] = new_qty
+                        except (ValueError, TypeError):
+                            pass
+                            
+                        # Confirmed Flag
+                        new_flag = row.get("確定フラグ")
+                        old_flag = orig.get("確定フラグ")
+                        if new_flag != old_flag:
+                            updates["確定フラグ"] = new_flag
+                            # Auto-set confirmed date if becoming confirmed
+                            if new_flag == "確定":
+                                updates["確定日時"] = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+                        
+                        # Farmer
+                        new_farmer = row.get("農家")
+                        old_farmer = orig.get("農家")
+                        if new_farmer != old_farmer:
+                            updates["農家"] = new_farmer
+
+                        # Check
+                        new_check = row.get("チェック") # Boolean or string depending on input
+                        old_check = orig.get("チェック")
+                        # Normalize check to boolean-like comparison if needed, or just string
+                        if str(new_check) != str(old_check):
+                             updates["チェック"] = new_check
+
+                        if updates:
+                            ok, msg = update_ledger_row_by_id(sid_stripped, sheet_name_s, did, updates, st_secrets=secrets_obj)
+                            if ok:
+                                updated_count += 1
+                            else:
+                                errors.append(f"ID {did}: {msg}")
+                    
+                    if updated_count > 0:
+                        st.success(f"✅ {updated_count}件の行を更新しました。")
+                        # Auto-refresh
+                        ok, msg, rows = fetch_ledger_rows(sid_stripped, sheet_name=sheet_name_s, only_unconfirmed=True, st_secrets=secrets_obj)
+                        if ok:
+                            st.session_state.ledger_unconfirmed_rows = rows
+                            st.rerun()
+                    elif not errors:
+                        st.info("変更された箇所はありませんでした。")
+                    
+                    if errors:
+                        st.error(f"一部の更新に失敗しました:\n" + "\n".join(errors))
+
+        st.caption("※ 納品IDが表示されていない行は更新できません。")
+    else:
+        st.caption("💡 台帳を読むには .streamlit/secrets.toml に [gcp] を設定するか、GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
+
+with tab4:
+    st.subheader("📄 台帳からPDF")
+    st.caption("台帳の「確定済み」データを納品日で取得し、差し札PDFを生成します。AppSheetで確定した後や、再印刷時に使えます。")
+    try:
+        secrets_obj_pdf = getattr(st, "secrets", None)
+    except Exception:
+        secrets_obj_pdf = None
+    if is_sheet_configured(secrets_obj_pdf):
+        ledger_id_pdf = st.text_input("台帳のスプレッドシートID", value=DEFAULT_LEDGER_SPREADSHEET_ID, key="ledger_pdf_id")
+        ledger_sheet_pdf = st.text_input("シート名", value="シート1", key="ledger_pdf_sheet")
+        
+        # Date selection improvement
+        default_date = datetime.now().date()
+        try:
+            if st.session_state.get("shipment_date"):
+                default_date = datetime.strptime(st.session_state.get("shipment_date"), "%Y-%m-%d").date()
+        except:
+            pass
+            
+        pdf_date_input = st.date_input("納品日付（確定データの対象日）", value=default_date, key="pdf_ledger_date_picker")
+        pdf_delivery_date = pdf_date_input.strftime("%Y-%m-%d") if pdf_date_input else ""
+        if st.button("確定済みデータを取得", key="fetch_confirmed_btn"):
+            sid = (ledger_id_pdf or "").strip()
+            if sid and (pdf_delivery_date or "").strip():
+                ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_pdf or "シート1").strip() or "シート1", only_unconfirmed=False, only_confirmed=True, delivery_date_from=(pdf_delivery_date or "").strip(), delivery_date_to=(pdf_delivery_date or "").strip(), st_secrets=secrets_obj_pdf)
+                if ok:
+                    st.success(msg)
+                    if rows:
+                        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                        st.session_state.ledger_confirmed_for_pdf = rows
+                    else:
+                        st.info("該当する確定データがありません。")
+                        st.session_state.ledger_confirmed_for_pdf = []
+                else:
+                    st.error(msg)
+            else:
+                st.warning("スプレッドシートIDと納品日付を入力してください。")
+        if st.session_state.get("ledger_confirmed_for_pdf"):
+            rows_for_pdf = st.session_state.ledger_confirmed_for_pdf
+            def _get_unit(item, spec, store):
+                u = lookup_unit(item, spec or "", store)
+                if u and u > 0:
+                    return u
+                s = get_item_setting(item)
+                return s.get("default_unit", 1) or 1
+            if st.button("PDFを生成（台帳の確定データから）", type="primary", key="pdf_from_ledger_btn"):
+                v2_data = ledger_rows_to_v2_format_with_units(rows_for_pdf, get_unit_for_item=_get_unit)
+                if v2_data:
+                    try:
+                        final_data = validate_and_fix_order_data(v2_data)
+                        labels = generate_labels_from_data(final_data, pdf_delivery_date or st.session_state.shipment_date)
+                        summary_data = generate_summary_table(final_data)
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                            pdf_path = tmp_file.name
+                            generator = LabelPDFGenerator()
+                            generator.generate_pdf(labels, summary_data, pdf_delivery_date or st.session_state.shipment_date, pdf_path)
+                            with open(pdf_path, "rb") as f:
+                                pdf_bytes = f.read()
+                            st.download_button(label="📥 差し札PDFをダウンロード", data=pdf_bytes, file_name=f"出荷ラベル_台帳_{(pdf_delivery_date or "").replace('/', '')[:8]}.pdf", mime="application/pdf", key="dl_pdf_ledger")
+                            try:
+                                os.unlink(pdf_path)
+                            except (PermissionError, OSError):
+                                pass
+                        st.success("✅ PDFを生成しました。上のボタンからダウンロードしてください。")
+                    except Exception as e:
+                        st.error(f"PDF生成エラー: {e}")
+                        with st.expander("詳細"):
+                            st.code(traceback.format_exc(), language="python")
+                else:
+                    st.warning("変換できるデータがありません。")
+    else:
+        st.caption("💡 台帳を読むには .streamlit/secrets.toml に [gcp] を設定してください。")
+
+with tab5:
     st.subheader("⚙️ 設定管理")
+
+    st.divider()
+    st.subheader("📩 取引先メール解析設定")
+    st.caption("送信者（メールアドレス）ごとに、画像解析するかテキスト解析するかを指定できます。")
+    
+    sender_rules = load_sender_rules()
+    
+    with st.expander("解析ルールを追加・編集", expanded=False):
+        rule_sender = st.text_input("送信者メールアドレス", placeholder="example@farm.jp", key="rule_sender_input")
+        rule_mode = st.selectbox("解析モード", ["image", "text", "both"], key="rule_mode_input", help="image: 画像のみ解析（デフォルト）\ntext: 本文のみ解析\nboth: 両方解析（未実装・将来用）")
+        
+        if st.button("ルールを保存", key="save_rule_btn"):
+            if rule_sender and "@" in rule_sender:
+                sender_rules[rule_sender.strip()] = {"mode": rule_mode}
+                save_sender_rules(sender_rules)
+                st.success(f"✅ {rule_sender} のルールを保存しました")
+                st.rerun()
+            else:
+                st.warning("有効なメールアドレスを入力してください")
+    
+    if sender_rules:
+        st.write("**登録済みルール:**")
+        rules_to_delete = []
+        for sender, rule in sender_rules.items():
+            if not isinstance(rule, dict): continue
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"- **{sender}**: {rule.get('mode', 'image')}")
+            with col2:
+                if st.button("削除", key=f"del_rule_{sender}"):
+                    del sender_rules[sender]
+                    save_sender_rules(sender_rules)
+                    st.rerun()
+    st.divider()
+
     stores = load_stores()
     st.subheader("🏪 店舗名管理")
     col1, col2 = st.columns([3, 1])
@@ -678,24 +769,42 @@ if st.session_state.parsed_data:
         except Exception:
             secrets_obj = None
         if is_sheet_configured(secrets_obj):
-            st.caption("Google スプレッドシートに追記する場合: スプレッドシートIDを入力して「納品データシートに追記」を押してください。")
+            st.caption("Google スプレッドシートに追記する場合: スプレッドシートIDを入力して「納品データシートに追記」または「台帳に追記（未確定）」を押してください。")
             _sid = ""
             try:
                 if secrets_obj is not None and hasattr(secrets_obj, "get"):
                     _sid = secrets_obj.get("DELIVERY_SPREADSHEET_ID", "") or getattr(secrets_obj, "DELIVERY_SPREADSHEET_ID", "")
             except Exception:
                 pass
-            sheet_id = st.text_input("スプレッドシートID", value=_sid or "", placeholder="URLの /d/ と /edit の間の文字列", key="delivery_sheet_id")
-            if st.button("📤 納品データシートに追記", key="append_sheet_btn"):
-                sid_stripped = (sheet_id or "").strip()
-                if sid_stripped:
-                    ok, msg = append_delivery_rows(sid_stripped, delivery_rows, st_secrets=secrets_obj)
-                    if ok:
-                        st.success(msg)
+            sheet_id = st.text_input("スプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, placeholder="URLの /d/ と /edit の間の文字列", key="delivery_sheet_id")
+            ledger_sheet_name = st.text_input("台帳シート名（台帳用の場合）", value="シート1", placeholder="例: シート1 または 台帳データ", key="ledger_sheet_name")
+            col_append1, col_append2 = st.columns(2)
+            with col_append1:
+                if st.button("📤 納品データシートに追記", key="append_sheet_btn"):
+                    sid_stripped = (sheet_id or "").strip()
+                    if sid_stripped:
+                        ok, msg = append_delivery_rows(sid_stripped, delivery_rows, sheet_name="納品データ", st_secrets=secrets_obj)
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
                     else:
-                        st.error(msg)
-                else:
-                    st.warning("スプレッドシートIDを入力してください。")
+                        st.warning("スプレッドシートIDを入力してください。")
+            with col_append2:
+                if st.button("📤 台帳に追記（未確定）", key="append_ledger_btn"):
+                    sid_stripped = (sheet_id or "").strip()
+                    if sid_stripped:
+                        ledger_rows = v2_result_to_ledger_rows(parsed, delivery_date=d_date or default_delivery, farmer=(farmer_name or "").strip())
+                        if ledger_rows:
+                            ok, msg = append_ledger_rows(sid_stripped, ledger_rows, sheet_name=(ledger_sheet_name or "シート1").strip() or "シート1", st_secrets=secrets_obj)
+                            if ok:
+                                st.success(msg)
+                            else:
+                                st.error(msg)
+                        else:
+                            st.warning("変換できる行がありません。")
+                    else:
+                        st.warning("スプレッドシートIDを入力してください。")
         else:
             st.caption("💡 スプレッドシートへ追記するには .streamlit/secrets.toml に [gcp] を設定するか、GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
     st.divider()

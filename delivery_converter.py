@@ -116,6 +116,47 @@ def v2_result_to_delivery_rows(
         })
     return rows
 
+def v2_result_to_ledger_rows(
+    v2_result: List[Dict[str, Any]],
+    delivery_date: str,
+    farmer: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    台帳シート用の行に変換（確定フラグ=未確定、確定日時=空白）。
+    列順: 納品日付, 納品先, 規格, 品目, 数量, 農家, 確定フラグ, 確定日時, チェック, 納品ID
+    """
+    if not v2_result or not isinstance(v2_result, list):
+        return []
+    delivery_date_str = _normalize_date(delivery_date)
+    farmer_s = (farmer or "").strip() if isinstance(farmer, str) else ""
+    rows: List[Dict[str, Any]] = []
+    for rec in v2_result:
+        if not isinstance(rec, dict):
+            continue
+        store = (rec.get("store") or "").strip()
+        item = (rec.get("item") or "").strip()
+        spec = (rec.get("spec") or "").strip()
+        unit = _safe_int(rec.get("unit", 0))
+        boxes = _safe_int(rec.get("boxes", 0))
+        remainder = _safe_int(rec.get("remainder", 0))
+        quantity = (unit * boxes) + remainder
+        if quantity <= 0:
+            continue
+        rows.append({
+            "納品日付": delivery_date_str,
+            "納品先": store,
+            "規格": spec,
+            "品目": item,
+            "数量": quantity,
+            "農家": farmer_s,
+            "確定フラグ": "未確定",
+            "確定日時": "",
+            "チェック": "",
+            "納品ID": uuid.uuid4().hex[:8],
+        })
+    return rows
+
+
 def delivery_rows_to_v2_format(delivery_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not delivery_rows or not isinstance(delivery_rows, list):
         return []
@@ -130,4 +171,48 @@ def delivery_rows_to_v2_format(delivery_rows: List[Dict[str, Any]]) -> List[Dict
         if qty <= 0:
             continue
         v2_list.append({"store": store, "item": item, "spec": spec, "unit": 1, "boxes": 0, "remainder": qty})
+    return v2_list
+
+
+def ledger_rows_to_v2_format_with_units(
+    ledger_rows: List[Dict[str, Any]],
+    get_unit_for_item: Optional[Any] = None,
+) -> List[Dict[str, Any]]:
+    """
+    台帳の行（数量のみ）を、generate_labels_from_data が受け取れる v2 形式（unit, boxes, remainder）に変換する。
+    get_unit_for_item(item: str, spec: str, store: str) -> int で 1コンテナあたりの入数を返す関数を渡す。
+    渡さない場合は unit=1, boxes=0, remainder=数量 とする。
+    """
+    if not ledger_rows or not isinstance(ledger_rows, list):
+        return []
+    v2_list: List[Dict[str, Any]] = []
+    for row in ledger_rows:
+        if not isinstance(row, dict):
+            continue
+        store = (row.get("納品先") or row.get("store") or "").strip()
+        item = (row.get("品目") or row.get("item") or "").strip()
+        spec = (row.get("規格") or row.get("spec") or "").strip()
+        qty = _safe_int(row.get("数量") or row.get("quantity") or 0)
+        if qty <= 0:
+            continue
+        unit = 1
+        if get_unit_for_item is not None and callable(get_unit_for_item):
+            try:
+                u = get_unit_for_item(item, spec, store)
+                if u and u > 0:
+                    unit = u
+            except Exception:
+                pass
+        if unit <= 0:
+            unit = 1
+        boxes = qty // unit
+        remainder = qty % unit
+        v2_list.append({
+            "store": store,
+            "item": item,
+            "spec": spec,
+            "unit": unit,
+            "boxes": boxes,
+            "remainder": remainder,
+        })
     return v2_list
