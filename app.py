@@ -721,7 +721,7 @@ if st.session_state.parsed_data:
         df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': entry.get('spec', ''), '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
     edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic",
-        column_config={'店舗名': st.column_config.SelectboxColumn('店舗名', options=get_known_stores(), required=True), '品目': st.column_config.TextColumn('品目', required=True), '規格': st.column_config.TextColumn('規格'), '入数(unit)': st.column_config.NumberColumn('入数(unit)', min_value=0, step=1), '箱数(boxes)': st.column_config.NumberColumn('箱数(boxes)', min_value=0, step=1), '端数(remainder)': st.column_config.NumberColumn('端数(remainder)', min_value=0, step=1), '合計数量': st.column_config.NumberColumn('合計数量', disabled=True)})
+        column_config={'店舗名': st.column_config.SelectboxColumn('店舗名', options=load_stores(), required=True), '品目': st.column_config.TextColumn('品目', required=True), '規格': st.column_config.TextColumn('規格'), '入数(unit)': st.column_config.NumberColumn('入数(unit)', min_value=0, step=1), '箱数(boxes)': st.column_config.NumberColumn('箱数(boxes)', min_value=0, step=1), '端数(remainder)': st.column_config.NumberColumn('端数(remainder)', min_value=0, step=1), '合計数量': st.column_config.NumberColumn('合計数量', disabled=True)})
     edited_df['合計数量'] = edited_df['入数(unit)'] * edited_df['箱数(boxes)'] + edited_df['端数(remainder)']
     df_for_compare = df.drop(columns=['合計数量'])
     edited_df_for_compare = edited_df.drop(columns=['合計数量'])
