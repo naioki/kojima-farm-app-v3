@@ -27,7 +27,11 @@ from config_manager import (
 from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
 from delivery_converter import v2_result_to_delivery_rows, v2_result_to_ledger_rows, ledger_rows_to_v2_format_with_units
-from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, fetch_ledger_confirmed_dates, update_ledger_row_by_id, is_sheet_configured
+from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, is_sheet_configured
+try:
+    from delivery_sheet_writer import fetch_ledger_confirmed_dates
+except ImportError:
+    fetch_ledger_confirmed_dates = None
 from order_processing import (
     safe_int,
     parse_order_image, parse_order_text, validate_and_fix_order_data,
@@ -489,7 +493,7 @@ with tab3:
 
 with tab4:
     st.subheader("📄 台帳からPDF")
-    st.caption("台帳の「確定済み」データを納品日で取得し、差し札PDFを生成します。まず台帳から日付一覧を取得し、新しい順で選べます。")
+    st.caption("台帳の「確定済み」データを納品日で取得し、差し札PDFを生成します。" + ("まず台帳から日付一覧を取得し、新しい順で選べます。" if fetch_ledger_confirmed_dates else "納品日付を選択して取得します。"))
     try:
         secrets_obj_pdf = getattr(st, "secrets", None)
     except Exception:
@@ -498,36 +502,46 @@ with tab4:
         ledger_id_pdf = st.text_input("台帳のスプレッドシートID", value=DEFAULT_LEDGER_SPREADSHEET_ID, key="ledger_pdf_id")
         ledger_sheet_pdf = st.text_input("シート名", value="台帳データ", key="ledger_pdf_sheet")
 
-        # 台帳のデータから納品日付一覧を取得（新しい順）
-        if "ledger_pdf_available_dates" not in st.session_state:
-            st.session_state.ledger_pdf_available_dates = []
-        if st.button("📅 台帳の日付一覧を取得（確定データから・新しい順）", type="primary", key="fetch_ledger_dates_btn"):
-            sid = (ledger_id_pdf or "").strip()
-            if sid:
-                ok, msg, dates = fetch_ledger_confirmed_dates(sid, sheet_name=(ledger_sheet_pdf or "台帳データ").strip() or "台帳データ", st_secrets=secrets_obj_pdf)
-                if ok:
-                    st.session_state.ledger_pdf_available_dates = dates
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
-            else:
-                st.warning("スプレッドシートIDを入力してください。")
-
-        available_dates = st.session_state.ledger_pdf_available_dates
         pdf_delivery_date = ""
-        if available_dates:
-            selected = st.selectbox("納品日付を選択（データから取得・新しい順）", options=available_dates, key="pdf_ledger_date_select")
-            pdf_delivery_date = (selected or "").replace("/", "-") if selected else ""
+        if fetch_ledger_confirmed_dates:
+            # 台帳のデータから納品日付一覧を取得（新しい順）
+            if "ledger_pdf_available_dates" not in st.session_state:
+                st.session_state.ledger_pdf_available_dates = []
+            if st.button("📅 台帳の日付一覧を取得（確定データから・新しい順）", type="primary", key="fetch_ledger_dates_btn"):
+                sid = (ledger_id_pdf or "").strip()
+                if sid:
+                    ok, msg, dates = fetch_ledger_confirmed_dates(sid, sheet_name=(ledger_sheet_pdf or "台帳データ").strip() or "台帳データ", st_secrets=secrets_obj_pdf)
+                    if ok:
+                        st.session_state.ledger_pdf_available_dates = dates
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                else:
+                    st.warning("スプレッドシートIDを入力してください。")
+
+            available_dates = st.session_state.ledger_pdf_available_dates
+            if available_dates:
+                selected = st.selectbox("納品日付を選択（データから取得・新しい順）", options=available_dates, key="pdf_ledger_date_select")
+                pdf_delivery_date = (selected or "").replace("/", "-") if selected else ""
+            else:
+                st.info("👆 「台帳の日付一覧を取得」を押すと、確定済みの納品日が新しい順で表示されます。")
+                default_date = datetime.now().date()
+                try:
+                    if st.session_state.get("shipment_date"):
+                        default_date = datetime.strptime(st.session_state.get("shipment_date"), "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    pass
+                pdf_date_input = st.date_input("納品日付（手動で指定する場合）", value=default_date, key="pdf_ledger_date_picker")
+                pdf_delivery_date = pdf_date_input.strftime("%Y-%m-%d") if pdf_date_input else ""
         else:
-            st.info("👆 「台帳の日付一覧を取得」を押すと、確定済みの納品日が新しい順で表示されます。")
             default_date = datetime.now().date()
             try:
                 if st.session_state.get("shipment_date"):
                     default_date = datetime.strptime(st.session_state.get("shipment_date"), "%Y-%m-%d").date()
             except (ValueError, TypeError):
                 pass
-            pdf_date_input = st.date_input("納品日付（手動で指定する場合）", value=default_date, key="pdf_ledger_date_picker")
+            pdf_date_input = st.date_input("納品日付（確定データの対象日）", value=default_date, key="pdf_ledger_date_picker")
             pdf_delivery_date = pdf_date_input.strftime("%Y-%m-%d") if pdf_date_input else ""
 
         if st.button("確定済みデータを取得", key="fetch_confirmed_btn"):
