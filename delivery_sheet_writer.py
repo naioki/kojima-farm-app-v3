@@ -95,7 +95,7 @@ def append_delivery_rows(spreadsheet_id: str, rows: List[Dict[str, Any]], sheet_
 def append_ledger_rows(
     spreadsheet_id: str,
     rows: List[Dict[str, Any]],
-    sheet_name: str = "シート1",
+    sheet_name: str = "台帳データ",
     credentials=None,
     st_secrets=None,
 ) -> Tuple[bool, str]:
@@ -107,7 +107,7 @@ def append_ledger_rows(
         return False, "スプレッドシートIDが指定されていません。"
     if not _validate_spreadsheet_id(sid):
         return False, "スプレッドシートIDの形式が正しくありません。"
-    sheet_name_s = (sheet_name or "シート1").strip() or "シート1"
+    sheet_name_s = (sheet_name or "台帳データ").strip() or "台帳データ"
     creds = credentials or _get_credentials(st_secrets)
     if creds is None:
         return False, "Google スプレッドシート用の認証が設定されていません。"
@@ -141,7 +141,7 @@ def append_ledger_rows(
 
 def fetch_ledger_rows(
     spreadsheet_id: str,
-    sheet_name: str = "シート1",
+    sheet_name: str = "台帳データ",
     only_unconfirmed: bool = True,
     only_confirmed: bool = False,
     delivery_date_from: Optional[str] = None,
@@ -161,7 +161,7 @@ def fetch_ledger_rows(
         return False, "スプレッドシートIDが指定されていません。", []
     if not _validate_spreadsheet_id(sid):
         return False, "スプレッドシートIDの形式が正しくありません。", []
-    sheet_name_s = (sheet_name or "シート1").strip() or "シート1"
+    sheet_name_s = (sheet_name or "台帳データ").strip() or "台帳データ"
     creds = credentials or _get_credentials(st_secrets)
     if creds is None:
         return False, "Google スプレッドシート用の認証が設定されていません。", []
@@ -236,7 +236,7 @@ def update_ledger_row_by_id(
     sid = (spreadsheet_id or "").strip()
     if not sid or not _validate_spreadsheet_id(sid):
         return False, "スプレッドシートIDが不正です。"
-    sheet_name_s = (sheet_name or "シート1").strip() or "シート1"
+    sheet_name_s = (sheet_name or "台帳データ").strip() or "台帳データ"
     delivery_id_s = (delivery_id or "").strip()
     if not delivery_id_s:
         return False, "納品IDを指定してください。"
