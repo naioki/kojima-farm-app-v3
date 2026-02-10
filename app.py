@@ -1045,11 +1045,17 @@ if st.session_state.parsed_data:
         boxes = safe_int(entry.get('boxes', 0))
         remainder = safe_int(entry.get('remainder', 0))
         effective_unit = get_effective_unit_size(normalized_item or item_name, spec_s)
-        # 「胡瓜バラ100×10」でAIが数量を10だけ返した場合: unit=10, boxes=0, remainder=0 → 入数100×単位数10=1000に補正
+        # 「胡瓜バラ100×10」でAIが unit=10, boxes=0, remainder=0 の場合 → 入数100×単位数10=1000に補正
         if effective_unit > 0 and unit > 0 and unit < effective_unit and boxes == 0 and remainder == 0:
             unit = effective_unit
             boxes = safe_int(entry.get('unit', 0))
             remainder = 0
+        # 「100×10」でAIが unit=100, boxes=0, remainder=10 の場合（10が単位数）→ 100×10=1000に補正
+        elif effective_unit > 0 and unit == effective_unit and boxes == 0 and 0 < remainder < effective_unit:
+            boxes = remainder
+            remainder = 0
+            entry['boxes'] = boxes
+            entry['remainder'] = 0
         if unit == 0 and effective_unit > 0:
             unit = effective_unit
         total_quantity = (unit * boxes) + remainder

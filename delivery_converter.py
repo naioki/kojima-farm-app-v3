@@ -50,6 +50,7 @@ def _compute_quantity(item: str, spec: str, unit: int, boxes: int, remainder: in
     """
     合計数量 = 入数(unit_size) × 単位数 を適用。
     - 「胡瓜バラ100×10」で unit=10, boxes=0, remainder=0 → 100*10=1000
+    - 同様に unit=100, boxes=0, remainder=10（10が単位数）→ 100*10=1000
     - unit に総数が入っている場合（unit>=effective, boxes=0, remainder=0）→ quantity=unit
     """
     effective = get_effective_unit_size(item, spec)
@@ -57,6 +58,9 @@ def _compute_quantity(item: str, spec: str, unit: int, boxes: int, remainder: in
         if unit < effective:
             return effective * unit  # 単位数が unit に入っている
         return unit  # 総数量が unit に入っている
+    # 入数が unit、単位数が remainder に入っているパターン（例: 100×10 → unit=100, remainder=10）
+    if effective > 0 and unit == effective and boxes == 0 and 0 < remainder < effective:
+        return effective * remainder
     return (unit * boxes) + remainder
 
 

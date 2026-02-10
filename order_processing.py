@@ -248,6 +248,9 @@ def validate_and_fix_order_data(order_data, auto_learn=True):
             boxes = unit
             unit = effective_unit
             remainder = 0
+        elif effective_unit > 0 and unit == effective_unit and boxes == 0 and 0 < remainder < effective_unit:
+            boxes = remainder
+            remainder = 0
         if unit == 0 and boxes == 0 and remainder == 0:
             errors.append(f"行{i+1}: 数量が全て0です（店舗: {store}, 品目: {item}）")
         spec_value = entry.get('spec', '')
