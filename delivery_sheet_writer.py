@@ -376,34 +376,67 @@ def set_ledger_rows_confirmed(
 ) -> Tuple[bool, str]:
     """
     指定した納品IDの行を一括で「確定」にする（確定フラグ＝確定、確定日時＝現在時刻）。
-    delivery_ids が空の場合は何もせず (True, "対象がありません。") を返す。
-    Returns: (成功可否, メッセージ)
+    シートを1回だけ読み、update_cells で一括書き込みするため 429（Read クォータ超過）を防ぐ。
     """
     if not delivery_ids or not isinstance(delivery_ids, list):
         return True, "対象がありません。"
+    ids_set = {str(did).strip() for did in delivery_ids if did and str(did).strip()}
+    if not ids_set:
+        return True, "対象がありません。"
     from datetime import datetime
     confirmed_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-    updates = {"確定フラグ": "確定", "確定日時": confirmed_at}
-    ok_count = 0
-    errors: List[str] = []
-    for did in delivery_ids:
-        did_s = (did or "").strip()
-        if not did_s:
+    creds = credentials or _get_credentials(st_secrets)
+    if creds is None:
+        return False, "Google スプレッドシート用の認証が設定されていません。"
+    try:
+        import gspread
+        try:
+            from gspread.cell import Cell
+        except ImportError:
+            from gspread.models import Cell  # gspread 5.x
+    except ImportError:
+        return False, "gspread がインストールされていません。"
+    sid = (spreadsheet_id or "").strip()
+    if not sid or not _validate_spreadsheet_id(sid):
+        return False, "スプレッドシートIDが不正です。"
+    sheet_name_s = (sheet_name or "台帳データ").strip() or "台帳データ"
+    try:
+        client = gspread.authorize(creds)
+        workbook = client.open_by_key(sid)
+        sheet = workbook.worksheet(sheet_name_s)
+        all_values = sheet.get_all_values()
+    except Exception as e:
+        return False, f"スプレッドシートの取得に失敗しました: {str(e)}"
+    if not all_values or len(all_values) < 2:
+        return False, "データがありません。"
+    header = [str(h).strip() for h in all_values[0]]
+    col_name_to_idx = {h: i for i, h in enumerate(header)}
+    if "納品ID" not in col_name_to_idx or "確定フラグ" not in col_name_to_idx or "確定日時" not in col_name_to_idx:
+        return False, "台帳に「納品ID」「確定フラグ」「確定日時」列が必要です。"
+    id_idx = col_name_to_idx["納品ID"]
+    col_flag = col_name_to_idx["確定フラグ"] + 1  # 1-based
+    col_date = col_name_to_idx["確定日時"] + 1
+    id_to_row: Dict[str, int] = {}
+    for r in range(1, len(all_values)):
+        row = all_values[r]
+        if id_idx < len(row):
+            did = str(row[id_idx]).strip()
+            if did in ids_set:
+                id_to_row[did] = r + 1  # 1-based
+    if not id_to_row:
+        return False, "指定した納品IDの行が見つかりません。"
+    cells: List[Cell] = []
+    for did in ids_set:
+        row_1 = id_to_row.get(did)
+        if not row_1:
             continue
-        ok, msg = update_ledger_row_by_id(
-            spreadsheet_id, sheet_name, did_s, updates,
-            credentials=credentials, st_secrets=st_secrets,
-        )
-        if ok:
-            ok_count += 1
-        else:
-            errors.append(f"{did_s}: {msg}")
-    if errors:
-        err_msg = "; ".join(errors[:5])
-        if len(errors) > 5:
-            err_msg += f" …他{len(errors) - 5}件"
-        return False, err_msg
-    return True, f"{ok_count}件を確定しました。"
+        cells.append(Cell(row=row_1, col=col_flag, value="確定"))
+        cells.append(Cell(row=row_1, col=col_date, value=confirmed_at))
+    try:
+        sheet.update_cells(cells)
+    except Exception as e:
+        return False, f"一括更新に失敗しました: {str(e)}"
+    return True, f"{len(id_to_row)}件を確定しました。"
 
 
 def is_sheet_configured(st_secrets=None) -> bool:
