@@ -1028,6 +1028,19 @@ if st.session_state.parsed_data:
         normalized_item = normalize_item_name(item_name)
         spec_raw = entry.get('spec', '') or ''
         spec_s = str(spec_raw).strip() if spec_raw is not None else ''
+        # 規格が空のときの自動入力: (1) 品目が胡瓜バラ/胡瓜平箱/長ねぎバラならバラ・平箱を補う (2) マスタに非空規格が1つだけならそれを使う
+        if not spec_s and (normalized_item or item_name):
+            item_key = (normalized_item or item_name).strip()
+            composite_spec = {"胡瓜バラ": "バラ", "胡瓜平箱": "平箱", "長ねぎバラ": "バラ", "長ネギバラ": "バラ"}.get(item_key, "")
+            if composite_spec:
+                spec_s = composite_spec
+                entry['spec'] = spec_s
+            else:
+                known = get_known_specs_for_item(normalized_item or item_name)
+                non_empty = [s for s in known if s and str(s).strip()]
+                if len(non_empty) == 1:
+                    spec_s = str(non_empty[0]).strip()
+                    entry['spec'] = spec_s
         unit = safe_int(entry.get('unit', 0))
         boxes = safe_int(entry.get('boxes', 0))
         remainder = safe_int(entry.get('remainder', 0))
@@ -1040,7 +1053,7 @@ if st.session_state.parsed_data:
         if unit == 0 and effective_unit > 0:
             unit = effective_unit
         total_quantity = (unit * boxes) + remainder
-        df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': entry.get('spec', ''), '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
+        df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': spec_s, '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
     edited_df = st.data_editor(df, width="stretch", num_rows="dynamic",
         column_config={'店舗名': st.column_config.SelectboxColumn('店舗名', options=load_stores(), required=True), '品目': st.column_config.TextColumn('品目', required=True), '規格': st.column_config.TextColumn('規格'), '入数(unit)': st.column_config.NumberColumn('入数(unit)', min_value=0, step=1), '箱数(boxes)': st.column_config.NumberColumn('箱数(boxes)', min_value=0, step=1), '端数(remainder)': st.column_config.NumberColumn('端数(remainder)', min_value=0, step=1), '合計数量': st.column_config.NumberColumn('合計数量', disabled=True)})

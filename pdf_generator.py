@@ -341,20 +341,19 @@ class LabelPDFGenerator:
             item_units[key] = unit_label
         
         # 品目ごとの総数セクションのタイトル（文字間隔をわずかに詰める・視認性を維持）
-        c.setFont(font_name, summary_title_font_size)
-        c.setCharSpace(-0.2)
+        # setCharSpace は Canvas ではなく Text オブジェクトのメソッドのため beginText を使用
         summary_title = f"【{shipment_date} 出荷・作成総数】"
-        c.drawString(10 * mm, summary_start_y, summary_title)
-        c.setCharSpace(0)
+        to_title = c.beginText(10 * mm, summary_start_y)
+        to_title.setFont(font_name, summary_title_font_size)
+        to_title.setCharSpace(-0.2)
+        to_title.textLine(summary_title)
+        c.drawText(to_title)
         
         # 品目ごとの総数を2列で表示（左半分・右半分に分割・文字間隔はわずかに詰める）
         summary_y_base = summary_start_y - 14 * mm
         row_height = 13 * mm  # 1行あたりの高さ
         left_x = 10 * mm
         right_x = self.A4_WIDTH / 2 + 12 * mm  # 右列は用紙中央 + 余白
-        
-        c.setFont(font_name, summary_data_font_size)
-        c.setCharSpace(-0.2)
         
         # キーをソート（品目名→規格の順）
         sorted_items = sorted(item_totals.items(), key=lambda x: (x[0][0], x[0][1]))
@@ -363,25 +362,29 @@ class LabelPDFGenerator:
         left_items = sorted_items[:mid]
         right_items = sorted_items[mid:]
         
-        # 左列を描画（品目表示名＝品目+荷姿で統一）
-        left_y = summary_y_base
+        # 左列を描画（Text オブジェクトで setCharSpace を適用）
+        to_left = c.beginText(left_x, summary_y_base)
+        to_left.setFont(font_name, summary_data_font_size)
+        to_left.setLeading(row_height)
+        to_left.setCharSpace(-0.2)
         for (item, spec), total in left_items:
             unit_label = item_units.get((item, spec), '')
             display_name = f"{item} {spec}".strip() if spec else item
             summary_text = f"・{display_name}：{total}{unit_label}"
-            c.drawString(left_x, left_y, summary_text)
-            left_y -= row_height
+            to_left.textLine(summary_text)
+        c.drawText(to_left)
         
         # 右列を描画
-        right_y = summary_y_base
+        to_right = c.beginText(right_x, summary_y_base)
+        to_right.setFont(font_name, summary_data_font_size)
+        to_right.setLeading(row_height)
+        to_right.setCharSpace(-0.2)
         for (item, spec), total in right_items:
             unit_label = item_units.get((item, spec), '')
             display_name = f"{item} {spec}".strip() if spec else item
             summary_text = f"・{display_name}：{total}{unit_label}"
-            c.drawString(right_x, right_y, summary_text)
-            right_y -= row_height
-        
-        c.setCharSpace(0)
+            to_right.textLine(summary_text)
+        c.drawText(to_right)
     
     def _draw_text_in_quadrant(self, c: canvas.Canvas, text: str, font_name: str, 
                                max_font_size: int, quadrant_width: float, 
