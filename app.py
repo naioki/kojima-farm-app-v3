@@ -22,12 +22,13 @@ from config_manager import (
     auto_learn_store, auto_learn_item,
     load_units, lookup_unit, add_unit_if_new, set_unit, initialize_default_units,
     load_item_settings, save_item_settings, get_item_setting, set_item_setting, set_item_receive_as_boxes, remove_item_setting,
+    load_item_spec_master, save_item_spec_master,
     DEFAULT_ITEM_SETTINGS, get_box_count_items
 )
 from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
 from delivery_converter import v2_result_to_delivery_rows, v2_result_to_ledger_rows, ledger_rows_to_v2_format_with_units
-from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, is_sheet_configured
+from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, set_ledger_rows_confirmed, is_sheet_configured
 try:
     from delivery_sheet_writer import fetch_ledger_confirmed_dates
 except ImportError:
@@ -122,7 +123,7 @@ def generate_labels_from_data(order_data: list, shipment_date: str) -> list:
 
 
 def get_unit_label_for_item(item: str, spec: str) -> str:
-    setting = get_item_setting(item)
+    setting = get_item_setting(item, spec)
     if setting.get("unit_type"):
         return setting["unit_type"]
     item_lower = item.lower() if item else ""
@@ -406,11 +407,71 @@ with tab3:
                     "農家": st.column_config.TextColumn("農家"),
                     "確定フラグ": st.column_config.SelectboxColumn("確定フラグ", options=["未確定", "確定"], required=True),
                     "確定日時": st.column_config.TextColumn("確定日時", disabled=True),
-                    "チェック": st.column_config.CheckboxColumn("チェック"),
+                    "チェック": st.column_config.CheckboxColumn("チェック", help="一括確定の対象にしたい行にチェック"),
                     "納品ID": st.column_config.TextColumn("納品ID", disabled=True),
                 },
                 key="ledger_editor"
             )
+
+            # 一括確定
+            sid_stripped = (ledger_id or "").strip()
+            sheet_name_s = (ledger_sheet_fetch or "台帳データ").strip() or "台帳データ"
+            if "confirm_bulk_all_ledger" not in st.session_state:
+                st.session_state.confirm_bulk_all_ledger = False
+
+            if st.session_state.confirm_bulk_all_ledger:
+                n_all = len(rows)
+                st.warning(f"**{n_all}件**を確定します。よろしいですか？")
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("はい、確定する", type="primary", key="bulk_confirm_yes_btn"):
+                        if sid_stripped:
+                            all_ids = [str(r.get("納品ID", "")).strip() for r in rows if r.get("納品ID")]
+                            ok, msg = set_ledger_rows_confirmed(sid_stripped, sheet_name_s, all_ids, st_secrets=secrets_obj)
+                            st.session_state.confirm_bulk_all_ledger = False
+                            if ok:
+                                st.success(msg)
+                                ok2, _, rows_new = fetch_ledger_rows(sid_stripped, sheet_name=sheet_name_s, only_unconfirmed=True, st_secrets=secrets_obj)
+                                if ok2:
+                                    st.session_state.ledger_unconfirmed_rows = rows_new
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        else:
+                            st.error("スプレッドシートIDが設定されていません。")
+                with col_no:
+                    if st.button("キャンセル", key="bulk_confirm_no_btn"):
+                        st.session_state.confirm_bulk_all_ledger = False
+                        st.rerun()
+            else:
+                st.caption("**一括確定**: チェックした行だけ確定するか、表示中のすべてを確定できます。")
+                col_check, col_all = st.columns(2)
+                with col_check:
+                    ids_checked = []
+                    for _, row in edited_df.iterrows():
+                        did = row.get("納品ID")
+                        if not did:
+                            continue
+                        ch = row.get("チェック")
+                        if ch is True or (isinstance(ch, str) and ch.strip().lower() in ("true", "1", "yes")) or ch == 1:
+                            ids_checked.append(str(did).strip())
+                    if st.button("✅ チェックした行を確定", key="bulk_confirm_checked_btn", disabled=len(ids_checked) == 0):
+                        if sid_stripped and ids_checked:
+                            ok, msg = set_ledger_rows_confirmed(sid_stripped, sheet_name_s, ids_checked, st_secrets=secrets_obj)
+                            if ok:
+                                st.success(msg)
+                                ok2, _, rows_new = fetch_ledger_rows(sid_stripped, sheet_name=sheet_name_s, only_unconfirmed=True, st_secrets=secrets_obj)
+                                if ok2:
+                                    st.session_state.ledger_unconfirmed_rows = rows_new
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    elif len(ids_checked) == 0:
+                        st.caption("チェックを入れた行がありません")
+                with col_all:
+                    if st.button("✅ 表示中のすべてを確定", key="bulk_confirm_all_btn"):
+                        st.session_state.confirm_bulk_all_ledger = True
+                        st.rerun()
 
             if st.button("💾 変更を保存 (スプレッドシートに反映)", type="primary", key="save_ledger_changes_btn"):
                 sid_stripped = (ledger_id or "").strip()
@@ -566,7 +627,7 @@ with tab4:
                 u = lookup_unit(item, spec or "", store)
                 if u and u > 0:
                     return u
-                s = get_item_setting(item)
+                s = get_item_setting(item, spec)
                 return s.get("default_unit", 1) or 1
             if st.button("PDFを生成（台帳の確定データから）", type="primary", key="pdf_from_ledger_btn"):
                 v2_data = ledger_rows_to_v2_format_with_units(rows_for_pdf, get_unit_for_item=_get_unit)
@@ -663,28 +724,46 @@ with tab5:
     items = load_items()
     item_settings = load_item_settings()
     box_count_items = get_box_count_items()
-    if item_settings:
+    spec_master = load_item_spec_master()
+    if spec_master:
         master_rows = []
-        for name, setting in sorted(item_settings.items()):
-            u = setting.get("default_unit", 0)
-            t = setting.get("unit_type", "袋")
-            as_boxes = setting.get("receive_as_boxes", False)
-            master_rows.append({"品目": name, "1コンテナあたりの入数": u, "単位": t, "受信方法": "箱数" if as_boxes else "総数"})
+        for r in spec_master:
+            u = r.get("default_unit", 0)
+            t = r.get("unit_type", "袋")
+            as_boxes = r.get("receive_as_boxes", False)
+            master_rows.append({
+                "品目": r.get("品目", ""),
+                "規格": r.get("規格", ""),
+                "1コンテナあたりの入数": u,
+                "単位": t,
+                "受信方法": "箱数" if as_boxes else "総数",
+            })
         if master_rows:
             df_master = pd.DataFrame(master_rows)
             edited_master = st.data_editor(df_master, width="stretch", hide_index=True,
-                column_config={"品目": st.column_config.TextColumn("品目", disabled=True), "1コンテナあたりの入数": st.column_config.NumberColumn("1コンテナあたりの入数", min_value=1, step=1), "単位": st.column_config.SelectboxColumn("単位", options=["袋", "本"], required=True), "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True)})
+                column_config={
+                    "品目": st.column_config.TextColumn("品目"),
+                    "規格": st.column_config.TextColumn("規格", placeholder="例: バラ・平箱・空欄可"),
+                    "1コンテナあたりの入数": st.column_config.NumberColumn("1コンテナあたりの入数", min_value=1, step=1),
+                    "単位": st.column_config.SelectboxColumn("単位", options=["袋", "本"], required=True),
+                    "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True),
+                })
             if st.button("💾 マスターデータを保存", key="save_master_btn", type="primary"):
+                out_rows = []
                 for _, row in edited_master.iterrows():
-                    name = str(row["品目"]).strip()
+                    name = str(row.get("品目", "")).strip()
+                    spec = str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else ""
                     u = int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30
                     t = str(row["単位"]).strip() or "袋"
                     as_boxes = str(row["受信方法"]).strip() == "箱数"
-                    set_item_setting(name, u, t, receive_as_boxes=as_boxes)
+                    out_rows.append({"品目": name, "規格": spec, "default_unit": u, "unit_type": t, "receive_as_boxes": as_boxes})
+                save_item_spec_master(out_rows)
                 st.success("✅ マスターデータを保存しました。")
                 st.rerun()
     st.divider()
-    new_item = st.text_input("品目名", placeholder="例: 新野菜", key="new_item_input")
+    st.caption("新規追加: 品目と規格（任意）を入力して追加します。")
+    new_item = st.text_input("品目名", placeholder="例: 胡瓜", key="new_item_input")
+    new_spec = st.text_input("規格", placeholder="例: バラ・平箱（空欄可）", key="new_spec_input")
     row1 = st.columns(2)
     with row1[0]:
         new_item_unit = st.number_input("1コンテナあたりの入数", min_value=1, value=30, step=1, key="new_item_unit_input")
@@ -693,13 +772,20 @@ with tab5:
     if st.button("追加", key="add_item", type="primary"):
         if new_item and new_item.strip():
             item_name = new_item.strip()
-            if add_new_item(item_name):
-                set_item_setting(item_name, int(new_item_unit), new_item_unit_type)
-                st.session_state[f"item_expanded_{item_name}"] = True
-                st.success(f"✅ 「{item_name}」を追加しました")
-                st.rerun()
-            else:
-                st.warning("既に存在する品目名です")
+            spec_name = (new_spec.strip() if new_spec and pd.notna(new_spec) else "")
+            add_new_item(item_name)
+            spec_master = load_item_spec_master()
+            spec_master.append({
+                "品目": item_name,
+                "規格": spec_name,
+                "default_unit": int(new_item_unit),
+                "unit_type": new_item_unit_type,
+                "receive_as_boxes": False,
+            })
+            save_item_spec_master(spec_master)
+            st.session_state[f"item_expanded_{item_name}"] = True
+            st.success(f"✅ 「{item_name}」" + (f"（規格: {spec_name}）" if spec_name else "") + " を追加しました")
+            st.rerun()
         else:
             st.warning("品目名を入力してください")
     st.divider()
@@ -751,7 +837,7 @@ if st.session_state.parsed_data:
         if unit == 0:
             item_name = entry.get('item', '')
             normalized_item = normalize_item_name(item_name)
-            item_setting = get_item_setting(normalized_item or item_name)
+            item_setting = get_item_setting(normalized_item or item_name, entry.get("spec"))
             default_unit = item_setting.get("default_unit", 0)
             if default_unit > 0:
                 unit = default_unit

@@ -12,6 +12,7 @@ STORES_FILE = CONFIG_DIR / "stores.json"
 ITEMS_FILE = CONFIG_DIR / "items.json"
 UNITS_FILE = CONFIG_DIR / "units.json"
 ITEM_SETTINGS_FILE = CONFIG_DIR / "item_settings.json"
+ITEM_SPEC_MASTER_FILE = CONFIG_DIR / "item_spec_master.json"
 
 DEFAULT_STORES = ["鎌ケ谷", "五香", "八柱", "青葉台", "咲が丘", "習志野台", "八千代台"]
 
@@ -251,7 +252,71 @@ def save_item_settings(settings: Dict[str, Dict[str, Any]]):
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
-def get_item_setting(item: str) -> Dict[str, Any]:
+def load_item_spec_master() -> List[Dict[str, Any]]:
+    """品目+規格ごとのマスタ行を返す。なければ item_settings から生成して保存する。"""
+    ensure_config_dir()
+    if ITEM_SPEC_MASTER_FILE.exists():
+        try:
+            with open(ITEM_SPEC_MASTER_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list) and data:
+                    return data
+        except Exception:
+            pass
+    settings = load_item_settings()
+    rows = []
+    for name, s in settings.items():
+        rows.append({
+            "品目": name,
+            "規格": "",
+            "default_unit": s.get("default_unit", 0),
+            "unit_type": s.get("unit_type", "袋"),
+            "receive_as_boxes": s.get("receive_as_boxes", False),
+        })
+    save_item_spec_master(rows)
+    return rows
+
+
+def save_item_spec_master(rows: List[Dict[str, Any]]) -> None:
+    """品目+規格マスタを保存し、規格が空の行で item_settings を同期する。"""
+    ensure_config_dir()
+    with open(ITEM_SPEC_MASTER_FILE, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=2)
+    settings = load_item_settings()
+    for row in rows:
+        item = (row.get("品目") or "").strip()
+        spec = (row.get("規格") or "").strip()
+        if item and spec == "":
+            settings[item] = {
+                "default_unit": int(row.get("default_unit", 0)) or 30,
+                "unit_type": (row.get("unit_type") or "袋").strip() or "袋",
+                "receive_as_boxes": bool(row.get("receive_as_boxes", False)),
+            }
+    save_item_settings(settings)
+
+
+def get_item_setting(item: str, spec: Optional[str] = None) -> Dict[str, Any]:
+    """品目（と規格）に一致する設定を返す。spec は省略可（その場合は規格なしを優先）。"""
+    spec_s = (spec or "").strip()
+    rows = load_item_spec_master()
+    for r in rows:
+        if (r.get("品目") or "").strip() != (item or "").strip():
+            continue
+        r_spec = (r.get("規格") or "").strip()
+        if r_spec == spec_s:
+            return {
+                "default_unit": int(r.get("default_unit", 0)) or 0,
+                "unit_type": (r.get("unit_type") or "袋").strip() or "袋",
+                "receive_as_boxes": bool(r.get("receive_as_boxes", False)),
+            }
+    if spec_s != "":
+        for r in rows:
+            if (r.get("品目") or "").strip() == (item or "").strip() and (r.get("規格") or "").strip() == "":
+                return {
+                    "default_unit": int(r.get("default_unit", 0)) or 0,
+                    "unit_type": (r.get("unit_type") or "袋").strip() or "袋",
+                    "receive_as_boxes": bool(r.get("receive_as_boxes", False)),
+                }
     settings = load_item_settings()
     if item in settings:
         s = settings[item].copy()

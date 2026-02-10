@@ -317,5 +317,44 @@ def update_ledger_row_by_id(
     return True, "1行を更新しました。"
 
 
+def set_ledger_rows_confirmed(
+    spreadsheet_id: str,
+    sheet_name: str,
+    delivery_ids: List[str],
+    credentials=None,
+    st_secrets=None,
+) -> Tuple[bool, str]:
+    """
+    指定した納品IDの行を一括で「確定」にする（確定フラグ＝確定、確定日時＝現在時刻）。
+    delivery_ids が空の場合は何もせず (True, "対象がありません。") を返す。
+    Returns: (成功可否, メッセージ)
+    """
+    if not delivery_ids or not isinstance(delivery_ids, list):
+        return True, "対象がありません。"
+    from datetime import datetime
+    confirmed_at = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+    updates = {"確定フラグ": "確定", "確定日時": confirmed_at}
+    ok_count = 0
+    errors: List[str] = []
+    for did in delivery_ids:
+        did_s = (did or "").strip()
+        if not did_s:
+            continue
+        ok, msg = update_ledger_row_by_id(
+            spreadsheet_id, sheet_name, did_s, updates,
+            credentials=credentials, st_secrets=st_secrets,
+        )
+        if ok:
+            ok_count += 1
+        else:
+            errors.append(f"{did_s}: {msg}")
+    if errors:
+        err_msg = "; ".join(errors[:5])
+        if len(errors) > 5:
+            err_msg += f" …他{len(errors) - 5}件"
+        return False, err_msg
+    return True, f"{ok_count}件を確定しました。"
+
+
 def is_sheet_configured(st_secrets=None) -> bool:
     return _get_credentials(st_secrets) is not None

@@ -238,7 +238,7 @@ def validate_and_fix_order_data(order_data, auto_learn=True):
             if looked_up > 0:
                 unit = looked_up
             else:
-                item_setting = get_item_setting(normalized_item or item)
+                item_setting = get_item_setting(normalized_item or item, spec_for_lookup)
                 default_unit = item_setting.get("default_unit", 0)
                 if default_unit > 0:
                     unit = default_unit
