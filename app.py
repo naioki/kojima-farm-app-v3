@@ -743,7 +743,7 @@ with tab5:
             edited_master = st.data_editor(df_master, width="stretch", hide_index=True,
                 column_config={
                     "品目": st.column_config.TextColumn("品目"),
-                    "規格": st.column_config.TextColumn("規格", placeholder="例: バラ・平箱・空欄可"),
+                    "規格": st.column_config.TextColumn("規格"),
                     "1コンテナあたりの入数": st.column_config.NumberColumn("1コンテナあたりの入数", min_value=1, step=1),
                     "単位": st.column_config.SelectboxColumn("単位", options=["袋", "本"], required=True),
                     "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True),
