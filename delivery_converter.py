@@ -1,11 +1,18 @@
 """
 v2 result to delivery rows converter.
+規格マスタ／規格名の入数（unit_size）を考慮した合計数量で J列・K列を計算する。
 """
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime
 import uuid
 import re
+
+try:
+    from config_manager import get_effective_unit_size
+except ImportError:
+    def get_effective_unit_size(_item: str, _spec: Optional[str] = None) -> int:
+        return 0
 
 _DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d")
 _OUTPUT_DATE_FMT = "%Y/%m/%d"
@@ -38,6 +45,20 @@ def _safe_int(v: Any, max_val: int = 999_999) -> int:
         return max(0, min(n, max_val))
     except (ValueError, OverflowError):
         return 0
+
+def _compute_quantity(item: str, spec: str, unit: int, boxes: int, remainder: int) -> int:
+    """
+    合計数量 = 入数(unit_size) × 単位数 を適用。
+    - 「胡瓜バラ100×10」で unit=10, boxes=0, remainder=0 → 100*10=1000
+    - unit に総数が入っている場合（unit>=effective, boxes=0, remainder=0）→ quantity=unit
+    """
+    effective = get_effective_unit_size(item, spec)
+    if effective > 0 and unit > 0 and boxes == 0 and remainder == 0:
+        if unit < effective:
+            return effective * unit  # 単位数が unit に入っている
+        return unit  # 総数量が unit に入っている
+    return (unit * boxes) + remainder
+
 
 def _lookup_unit_price(item: str, spec: str, prices: Dict) -> float:
     key_spec = (item, spec)
@@ -87,7 +108,7 @@ def v2_result_to_delivery_rows(
         unit = _safe_int(rec.get("unit", 0))
         boxes = _safe_int(rec.get("boxes", 0))
         remainder = _safe_int(rec.get("remainder", 0))
-        quantity = (unit * boxes) + remainder
+        quantity = _compute_quantity(item, spec, unit, boxes, remainder)
         if quantity <= 0:
             continue
         if store in store_map:
@@ -139,7 +160,7 @@ def v2_result_to_ledger_rows(
         unit = _safe_int(rec.get("unit", 0))
         boxes = _safe_int(rec.get("boxes", 0))
         remainder = _safe_int(rec.get("remainder", 0))
-        quantity = (unit * boxes) + remainder
+        quantity = _compute_quantity(item, spec, unit, boxes, remainder)
         if quantity <= 0:
             continue
         rows.append({
@@ -153,6 +174,9 @@ def v2_result_to_ledger_rows(
             "確定日時": "",
             "チェック": "",
             "納品ID": uuid.uuid4().hex[:8],
+            "納品単価": 0,
+            "納品金額": 0,
+            "ステータス": "未確定",
         })
     return rows
 

@@ -10,10 +10,11 @@ DELIVERY_SHEET_COLUMNS = [
     "納品ID", "納品日付", "農家", "納品先", "請求先", "品目", "持込日付",
     "規格", "納品単価", "数量", "納品金額", "税率", "チェック",
 ]
-# 台帳「台帳データ」用の列順（確定フラグ・確定日時含む）
+# 台帳「台帳データ」用の列順（確定フラグ・確定日時・ステータス・単価含む）
 LEDGER_SHEET_COLUMNS = [
     "納品日付", "納品先", "規格", "品目", "数量", "農家",
     "確定フラグ", "確定日時", "チェック", "納品ID",
+    "納品単価", "納品金額", "ステータス",
 ]
 _APPEND_BATCH_SIZE = 500
 _SPREADSHEET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -123,11 +124,12 @@ def append_ledger_rows(
         import traceback
         traceback.print_exc()
         return False, f"スプレッドシートの取得に失敗しました: {repr(e)}"
+    _defaults = {"ステータス": "未確定", "納品単価": 0, "納品金額": 0}
     data = []
     for row in rows:
         if not isinstance(row, dict):
             continue
-        data.append([_normalize_cell_value(row.get(col, "")) for col in LEDGER_SHEET_COLUMNS])
+        data.append([_normalize_cell_value(row.get(col, _defaults.get(col, ""))) for col in LEDGER_SHEET_COLUMNS])
     if not data:
         return True, "追記する有効な行がありません。"
     try:
@@ -139,11 +141,22 @@ def append_ledger_rows(
     return True, f"{len(data)} 行を台帳に追記しました（未確定）。"
 
 
+def _is_zero_or_empty_unit_price(val: Any) -> bool:
+    """納品単価が0または空とみなせるか"""
+    if val is None or val == "":
+        return True
+    try:
+        return float(str(val).strip().replace(",", "")) == 0
+    except (ValueError, TypeError):
+        return True
+
+
 def fetch_ledger_rows(
     spreadsheet_id: str,
     sheet_name: str = "台帳データ",
     only_unconfirmed: bool = True,
     only_confirmed: bool = False,
+    only_zero_unit_price: bool = False,
     delivery_date_from: Optional[str] = None,
     delivery_date_to: Optional[str] = None,
     credentials=None,
@@ -153,6 +166,7 @@ def fetch_ledger_rows(
     台帳シートから行を取得。
     - only_unconfirmed=True: 確定フラグが空または「未確定」の行のみ。
     - only_confirmed=True: 確定フラグが「確定」の行のみ（PDF用）。
+    - only_zero_unit_price=True: 納品単価（I列想定）が0または空の行のみ（事務・単価一括入力用）。
     - delivery_date_from / _to: 納品日付でフィルタ（YYYY/MM/DD または YYYY-MM-DD 形式）。
     Returns: (成功可否, メッセージ, 行のリスト)
     """
@@ -181,6 +195,7 @@ def fetch_ledger_rows(
     header = [str(h).strip() for h in all_values[0]]
     idx_confirmed = None
     idx_delivery_date = None
+    has_status_col = "ステータス" in header
     for i, h in enumerate(header):
         if h == "確定フラグ":
             idx_confirmed = i
@@ -196,14 +211,23 @@ def fetch_ledger_rows(
         while len(r) < len(header):
             r.append("")
         row_dict = {header[i]: r[i] for i in range(len(header))}
-        if only_unconfirmed and idx_confirmed is not None:
-            val = (row_dict.get("確定フラグ") or "").strip()
-            if val and val != "未確定":
-                continue
-        if only_confirmed and idx_confirmed is not None:
-            val = (row_dict.get("確定フラグ") or "").strip()
-            if val != "確定":
-                continue
+        status_val = (row_dict.get("ステータス") or "").strip()
+        if only_unconfirmed and not only_zero_unit_price:
+            if has_status_col:
+                if status_val and status_val not in ("", "未確定"):
+                    continue
+            elif idx_confirmed is not None:
+                val = (row_dict.get("確定フラグ") or "").strip()
+                if val and val != "未確定":
+                    continue
+        if only_confirmed:
+            if has_status_col:
+                if status_val not in ("確定", "請求済"):
+                    continue
+            elif idx_confirmed is not None:
+                val = (row_dict.get("確定フラグ") or "").strip()
+                if val != "確定":
+                    continue
         if delivery_date_from is not None or delivery_date_to is not None:
             if idx_delivery_date is None:
                 continue
@@ -211,6 +235,12 @@ def fetch_ledger_rows(
             if delivery_date_from and _norm_d(delivery_date_from) > d:
                 continue
             if delivery_date_to and d > _norm_d(delivery_date_to):
+                continue
+        if only_zero_unit_price:
+            unit_price_val = row_dict.get("納品単価", "")
+            if not _is_zero_or_empty_unit_price(unit_price_val):
+                continue
+            if has_status_col and status_val not in ("", "未確定"):
                 continue
         rows_out.append(row_dict)
     msg = f"{len(rows_out)} 件を取得しました。"
@@ -306,6 +336,26 @@ def update_ledger_row_by_id(
             break
     if row_found is None:
         return False, f"納品ID「{delivery_id_s}」の行が見つかりません。"
+    # 数量を更新する場合は納品金額を再計算（納品金額＝納品単価×数量）
+    if "数量" in updates:
+        row_data = all_values[row_found - 1]
+        unit_price = 0.0
+        try:
+            if "納品単価" in col_name_to_idx:
+                idx = col_name_to_idx["納品単価"]
+                if idx < len(row_data):
+                    unit_price = float(str(row_data[idx]).replace(",", "").strip() or 0)
+        except (ValueError, TypeError):
+            pass
+        try:
+            qty = int(float(str(updates["数量"]).replace(",", ""))) if updates.get("数量") is not None else 0
+        except (ValueError, TypeError):
+            qty = 0
+        qty = max(0, qty)  # 負数は0扱い
+        amount = max(0, int(round(unit_price * qty)))
+        updates = dict(updates)
+        if "納品金額" in col_name_to_idx:
+            updates["納品金額"] = amount
     for col_name, value in updates.items():
         if col_name not in col_name_to_idx:
             continue

@@ -1,11 +1,13 @@
 import pytest
 from datetime import datetime
+from unittest.mock import patch
 from delivery_converter import (
     v2_result_to_delivery_rows,
     v2_result_to_ledger_rows,
     ledger_rows_to_v2_format_with_units,
     _safe_int,
-    _normalize_date
+    _normalize_date,
+    _compute_quantity,
 )
 
 def test_safe_int():
@@ -70,3 +72,25 @@ def test_ledger_rows_to_v2_format_with_units():
     assert entry_def["unit"] == 1
     assert entry_def["boxes"] == 25
     assert entry_def["remainder"] == 0
+
+
+@patch("delivery_converter.get_effective_unit_size")
+def test_compute_quantity_effective_unit_single_unit(mock_effective):
+    """胡瓜バラ100×10: unit=10, boxes=0, remainder=0 → 100*10=1000"""
+    mock_effective.return_value = 100
+    assert _compute_quantity("胡瓜バラ", "バラ100", 10, 0, 0) == 1000
+
+
+@patch("delivery_converter.get_effective_unit_size")
+def test_compute_quantity_total_in_unit(mock_effective):
+    """総数量が unit に入っている場合（unit>=effective）→ quantity=unit"""
+    mock_effective.return_value = 100
+    assert _compute_quantity("胡瓜バラ", "バラ100", 100, 0, 0) == 100
+    assert _compute_quantity("胡瓜バラ", "バラ100", 500, 0, 0) == 500
+
+
+@patch("delivery_converter.get_effective_unit_size")
+def test_compute_quantity_normal(mock_effective):
+    """通常の unit*boxes+remainder（effective なし）"""
+    mock_effective.return_value = 0
+    assert _compute_quantity("Item", "Spec", 10, 2, 5) == 25

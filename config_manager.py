@@ -1,11 +1,24 @@
 """
 設定管理モジュール
 店舗名・品目名をJSONファイルで動的に管理
+規格名から入数（unit_size）を抽出する正規表現ロジックを含む。
 """
 import json
 import os
+import re
 from pathlib import Path
 from typing import List, Dict, Optional, Any
+
+# 規格名に含まれる入数（本数・袋数）を抽出する正規表現パターン（優先順）
+# 例: バラ100, 3本, 平箱（30本）, 30本入り
+SPEC_UNIT_SIZE_PATTERNS = [
+    re.compile(r"バラ\s*(\d+)", re.IGNORECASE),           # バラ100, バラ 100
+    re.compile(r"平箱\s*[（(]\s*(\d+)", re.IGNORECASE),    # 平箱（30本）, 平箱(30)
+    re.compile(r"[（(]\s*(\d+)\s*[本)）]", re.IGNORECASE), # （30本）, (30本)
+    re.compile(r"(\d+)\s*本入り", re.IGNORECASE),         # 30本入り
+    re.compile(r"(\d+)\s*本\b", re.IGNORECASE),          # 3本, 30本
+    re.compile(r"(\d+)\s*袋\b", re.IGNORECASE),           # 10袋
+]
 
 CONFIG_DIR = Path("config")
 STORES_FILE = CONFIG_DIR / "stores.json"
@@ -211,13 +224,13 @@ def initialize_default_units():
 
 
 DEFAULT_ITEM_SETTINGS = {
-    "胡瓜": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False},
-    "胡瓜平箱": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": True},
-    "胡瓜バラ": {"default_unit": 100, "unit_type": "本", "receive_as_boxes": False},
-    "長ネギ": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": False},
-    "長ねぎバラ": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": False},
-    "春菊": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False},
-    "青梗菜": {"default_unit": 20, "unit_type": "袋", "receive_as_boxes": False},
+    "胡瓜": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 30},
+    "胡瓜平箱": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": True, "min_shipping_unit": 30},
+    "胡瓜バラ": {"default_unit": 100, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 30},
+    "長ネギ": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 1},
+    "長ねぎバラ": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 1},
+    "春菊": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 1},
+    "青梗菜": {"default_unit": 20, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 1},
 }
 
 
@@ -272,6 +285,7 @@ def load_item_spec_master() -> List[Dict[str, Any]]:
             "default_unit": s.get("default_unit", 0),
             "unit_type": s.get("unit_type", "袋"),
             "receive_as_boxes": s.get("receive_as_boxes", False),
+            "min_shipping_unit": s.get("min_shipping_unit", 0),
         })
     save_item_spec_master(rows)
     return rows
@@ -291,6 +305,7 @@ def save_item_spec_master(rows: List[Dict[str, Any]]) -> None:
                 "default_unit": int(row.get("default_unit", 0)) or 30,
                 "unit_type": (row.get("unit_type") or "袋").strip() or "袋",
                 "receive_as_boxes": bool(row.get("receive_as_boxes", False)),
+                "min_shipping_unit": int(row.get("min_shipping_unit", 0)) or 0,
             }
     save_item_settings(settings)
 
@@ -308,6 +323,7 @@ def get_item_setting(item: str, spec: Optional[str] = None) -> Dict[str, Any]:
                 "default_unit": int(r.get("default_unit", 0)) or 0,
                 "unit_type": (r.get("unit_type") or "袋").strip() or "袋",
                 "receive_as_boxes": bool(r.get("receive_as_boxes", False)),
+                "min_shipping_unit": int(r.get("min_shipping_unit", 0)) or 0,
             }
     if spec_s != "":
         for r in rows:
@@ -316,13 +332,74 @@ def get_item_setting(item: str, spec: Optional[str] = None) -> Dict[str, Any]:
                     "default_unit": int(r.get("default_unit", 0)) or 0,
                     "unit_type": (r.get("unit_type") or "袋").strip() or "袋",
                     "receive_as_boxes": bool(r.get("receive_as_boxes", False)),
+                    "min_shipping_unit": int(r.get("min_shipping_unit", 0)) or 0,
                 }
     settings = load_item_settings()
     if item in settings:
         s = settings[item].copy()
         s.setdefault("receive_as_boxes", False)
+        s.setdefault("min_shipping_unit", 0)
         return s
-    return {"default_unit": 0, "unit_type": "袋", "receive_as_boxes": False}
+    return {"default_unit": 0, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 0}
+
+
+def extract_unit_size_from_spec(spec_name: Optional[str]) -> int:
+    """
+    規格名に含まれる数値（入数）を正規表現で抽出する。
+    例: 「バラ100」→100, 「3本」→3, 「平箱（30本）」→30
+    該当なしの場合は 0 を返す。
+    """
+    if spec_name is None or not isinstance(spec_name, str):
+        return 0
+    s = spec_name.strip()
+    if not s:
+        return 0
+    for pat in SPEC_UNIT_SIZE_PATTERNS:
+        m = pat.search(s)
+        if m:
+            try:
+                n = int(m.group(1))
+                return max(1, min(n, 9999))
+            except (ValueError, IndexError):
+                continue
+    return 0
+
+
+def get_effective_unit_size(item: str, spec: Optional[str] = None) -> int:
+    """
+    合計数量計算用の有効入数（unit_size）を返す。
+    優先順位: (1) 規格マスタの default_unit (2) 規格名から抽出した数値
+    """
+    spec_s = (spec or "").strip()
+    setting = get_item_setting(item, spec_s)
+    master_unit = int(setting.get("default_unit", 0)) or 0
+    if master_unit > 0:
+        return master_unit
+    from_spec = extract_unit_size_from_spec(spec_s)
+    if from_spec > 0:
+        return from_spec
+    return 0
+
+
+def get_min_shipping_unit(item: str, spec: Optional[str] = None) -> int:
+    """品目（と規格）ごとの最小出荷単位。未設定なら 0（チェックしない）。"""
+    setting = get_item_setting(item, spec)
+    return int(setting.get("min_shipping_unit", 0)) or 0
+
+
+def get_known_specs_for_item(item: str) -> List[str]:
+    """品目に対するマスタ登録済み規格のリスト（空文字＝規格なし含む）。"""
+    rows = load_item_spec_master()
+    return [(r.get("規格") or "").strip() for r in rows if (r.get("品目") or "").strip() == (item or "").strip()]
+
+
+def is_spec_in_master(item: str, spec: str) -> bool:
+    """AI解析結果の規格がマスタに登録されているか。空規格はマスタに「規格なし」があればTrue。"""
+    spec_s = (spec or "").strip()
+    known = get_known_specs_for_item(item)
+    if not known:
+        return False
+    return spec_s in known
 
 
 def set_item_setting(item: str, default_unit: int, unit_type: str, receive_as_boxes: bool = None):

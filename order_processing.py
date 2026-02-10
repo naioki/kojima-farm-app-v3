@@ -13,7 +13,8 @@ from config_manager import (
     load_stores, auto_learn_store,
     load_items, auto_learn_item,
     load_item_settings, get_box_count_items,
-    lookup_unit, get_item_setting, add_unit_if_new
+    lookup_unit, get_item_setting, add_unit_if_new,
+    get_effective_unit_size,
 )
 
 def safe_int(v):
@@ -232,8 +233,8 @@ def validate_and_fix_order_data(order_data, auto_learn=True):
         unit = safe_int(entry.get('unit', 0))
         boxes = safe_int(entry.get('boxes', 0))
         remainder = safe_int(entry.get('remainder', 0))
+        spec_for_lookup = (entry.get('spec') or '').strip() if entry.get('spec') is not None else ''
         if unit <= 0:
-            spec_for_lookup = (entry.get('spec') or '').strip() if entry.get('spec') is not None else ''
             looked_up = lookup_unit(normalized_item or item, spec_for_lookup, validated_store or store)
             if looked_up > 0:
                 unit = looked_up
@@ -242,6 +243,11 @@ def validate_and_fix_order_data(order_data, auto_learn=True):
                 default_unit = item_setting.get("default_unit", 0)
                 if default_unit > 0:
                     unit = default_unit
+        effective_unit = get_effective_unit_size(normalized_item or item, spec_for_lookup)
+        if effective_unit > 0 and unit > 0 and unit < effective_unit and boxes == 0 and remainder == 0:
+            boxes = unit
+            unit = effective_unit
+            remainder = 0
         if unit == 0 and boxes == 0 and remainder == 0:
             errors.append(f"行{i+1}: 数量が全て0です（店舗: {store}, 品目: {item}）")
         spec_value = entry.get('spec', '')

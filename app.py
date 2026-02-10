@@ -23,7 +23,8 @@ from config_manager import (
     load_units, lookup_unit, add_unit_if_new, set_unit, initialize_default_units,
     load_item_settings, save_item_settings, get_item_setting, set_item_setting, set_item_receive_as_boxes, remove_item_setting,
     load_item_spec_master, save_item_spec_master,
-    DEFAULT_ITEM_SETTINGS, get_box_count_items
+    DEFAULT_ITEM_SETTINGS, get_box_count_items,
+    get_effective_unit_size, get_min_shipping_unit, get_known_specs_for_item, is_spec_in_master,
 )
 from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
@@ -189,11 +190,13 @@ def generate_line_summary(order_data: list) -> str:
     return line_text
 
 
-st.title("📦 出荷ラベル生成アプリ")
-st.caption("画像アップロード・メール取得 → 解析・編集 → 納品データ・台帳連携・PDF生成まで一括で対応します。")
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📸 画像解析", "📧 メール自動読み取り", "📋 未確定一覧", "📄 台帳からPDF", "⚙️ 設定管理"])
+NAV_FIELD = "現場用：出荷業務"
+NAV_OFFICE = "事務用：請求管理"
 
 with st.sidebar:
+    st.header("⚙️ メニュー")
+    nav_role = st.radio("業務", [NAV_FIELD, NAV_OFFICE], key="nav_role", label_visibility="collapsed")
+    st.markdown("---")
     st.header("⚙️ 設定")
     try:
         if hasattr(st, 'secrets'):
@@ -216,9 +219,159 @@ with st.sidebar:
     with st.expander("📋 使い方", expanded=False):
         st.markdown("1. APIキーを設定  \n2. 出荷日を選択  \n3. 画像をアップロード or メールから取得  \n4. 解析結果を確認・修正  \n5. PDFを生成")
 
+# 事務用：請求管理（単価一括入力）— APIキー不要
+if nav_role == NAV_OFFICE:
+    st.title("📋 事務用：請求管理")
+    st.caption("台帳データの「納品単価」が未入力の行に単価を一括入力し、納品金額を再計算して反映します。")
+    try:
+        secrets_obj_office = getattr(st, "secrets", None)
+    except Exception:
+        secrets_obj_office = None
+    if not is_sheet_configured(secrets_obj_office):
+        st.caption("💡 台帳を読むには .streamlit/secrets.toml に [gcp] を設定するか、GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
+        st.stop()
+    _sid = ""
+    try:
+        if secrets_obj_office and hasattr(secrets_obj_office, "get"):
+            _sid = secrets_obj_office.get("DELIVERY_SPREADSHEET_ID", "") or getattr(secrets_obj_office, "DELIVERY_SPREADSHEET_ID", "")
+    except Exception:
+        pass
+    ledger_id_office = st.text_input("台帳のスプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, key="office_ledger_id")
+    ledger_sheet_office = st.text_input("シート名", value="台帳データ", key="office_ledger_sheet")
+    if st.button("納品単価が0または空の行を取得", type="primary", key="office_fetch_btn"):
+        sid = (ledger_id_office or "").strip()
+        if sid:
+            ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
+            if ok:
+                st.session_state.office_zero_unit_rows = rows
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+        else:
+            st.warning("スプレッドシートIDを入力してください。")
+
+    if st.session_state.get("office_zero_unit_rows"):
+        rows_raw = st.session_state.office_zero_unit_rows
+        stores_master = load_stores()
+        spec_master = load_item_spec_master()
+        items_master = sorted(set((r.get("品目") or "").strip() for r in spec_master if (r.get("品目") or "").strip()))
+        specs_master = sorted(set((r.get("規格") or "").strip() for r in spec_master if (r.get("規格") or "").strip() is not None))
+        stores_options = ["（すべて）"] + stores_master
+        items_options = ["（すべて）"] + items_master
+        specs_options = ["（すべて）"] + specs_master
+
+        st.subheader("絞り込み")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            date_from = st.date_input("納品日付（から）", value=datetime.now().date() - timedelta(days=30), key="office_date_from")
+            date_to = st.date_input("納品日付（まで）", value=datetime.now().date(), key="office_date_to")
+        with c2:
+            filter_store = st.selectbox("納品先", options=stores_options, key="office_filter_store")
+        with c3:
+            filter_item = st.selectbox("品目", options=items_options, key="office_filter_item")
+        with c4:
+            filter_spec = st.selectbox("規格", options=specs_options, key="office_filter_spec")
+
+        def _norm_d(s):
+            if s is None or s == "": return ""
+            return str(s).strip().replace("-", "/")
+        date_from_s = _norm_d(date_from.strftime("%Y-%m-%d"))
+        date_to_s = _norm_d(date_to.strftime("%Y-%m-%d"))
+        filtered = []
+        for r in rows_raw:
+            d = _norm_d(r.get("納品日付", ""))
+            if date_from_s and d < date_from_s:
+                continue
+            if date_to_s and d > date_to_s:
+                continue
+            store = (r.get("納品先") or "").strip()
+            if filter_store and filter_store != "（すべて）" and store != filter_store:
+                continue
+            item = (r.get("品目") or "").strip()
+            if filter_item and filter_item != "（すべて）" and item != filter_item:
+                continue
+            spec = (r.get("規格") or "").strip()
+            if filter_spec and filter_spec != "（すべて）" and spec != filter_spec:
+                continue
+            filtered.append(r)
+
+        if not filtered:
+            st.info("条件に合う行がありません。")
+            st.stop()
+
+        # 選択列を追加（一括適用用）
+        for i, r in enumerate(filtered):
+            if "選択" not in r:
+                r["選択"] = False
+        df_office = pd.DataFrame(filtered)
+        if "選択" not in df_office.columns:
+            df_office["選択"] = False
+
+        st.subheader("対象データ（編集・チェック後は下の一括適用を利用）")
+        col_config_office = {}
+        for col in df_office.columns:
+            if col == "選択":
+                col_config_office[col] = st.column_config.CheckboxColumn("選択", help="一括適用する行にチェック")
+            elif col == "納品単価":
+                col_config_office[col] = st.column_config.NumberColumn("納品単価", min_value=0, step=1)
+            elif col == "納品金額":
+                col_config_office[col] = st.column_config.NumberColumn("納品金額", min_value=0, step=1)
+            elif col == "数量":
+                col_config_office[col] = st.column_config.NumberColumn("数量", min_value=0, step=1)
+            else:
+                col_config_office[col] = st.column_config.TextColumn(col)
+        edited_office_df = st.data_editor(df_office, width="stretch", hide_index=True, column_config=col_config_office, key="office_data_editor")
+
+        st.subheader("一括更新")
+        apply_price = st.number_input("適用する単価", min_value=0, value=0, step=1, key="office_apply_price")
+        if st.button("選択した行に一括適用", type="primary", key="office_apply_btn"):
+            if apply_price <= 0:
+                st.warning("適用する単価を1以上で入力してください。")
+            else:
+                selected_ids = []
+                for idx, row in edited_office_df.iterrows():
+                    ch = row.get("選択")
+                    if ch is True or (isinstance(ch, str) and str(ch).strip().lower() in ("true", "1", "yes")):
+                        did = row.get("納品ID")
+                        if did:
+                            selected_ids.append((str(did).strip(), row))
+                if not selected_ids:
+                    st.warning("一括適用する行にチェックを入れてください。")
+                else:
+                    sid = (ledger_id_office or "").strip()
+                    sheet_s = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
+                    ok_count = 0
+                    errs = []
+                    for did, row in selected_ids:
+                        try:
+                            qty = int(float(str(row.get("数量", 0)).replace(",", ""))) if row.get("数量") is not None else 0
+                        except (ValueError, TypeError):
+                            qty = 0
+                        amount = apply_price * qty
+                        ok, msg = update_ledger_row_by_id(sid, sheet_s, did, {"納品単価": apply_price, "納品金額": amount, "ステータス": "確定"}, st_secrets=secrets_obj_office)
+                        if ok:
+                            ok_count += 1
+                        else:
+                            errs.append(f"{did}: {msg}")
+                    if ok_count > 0:
+                        st.success(f"✅ {ok_count}件を更新しました。（納品金額＝単価×数量で再計算）")
+                        ok2, _, new_rows = fetch_ledger_rows(sid, sheet_name=sheet_s, only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
+                        if ok2:
+                            st.session_state.office_zero_unit_rows = new_rows
+                        st.rerun()
+                    if errs:
+                        st.error("\n".join(errs[:10]))
+    st.stop()
+
+# 現場用：出荷業務
 if not api_key:
     st.warning("⚠️ サイドバーでGemini APIキーを入力してください。")
     st.stop()
+
+st.title("📦 出荷ラベル生成アプリ")
+st.caption("画像アップロード・メール取得 → 解析・編集 → 納品データ・台帳連携・PDF生成まで一括で対応します。")
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📸 画像解析", "📧 メール自動読み取り", "📋 未確定一覧", "📄 台帳からPDF", "⚙️ 設定管理"])
 
 with tab1:
     uploaded_file = st.file_uploader("注文画像をアップロード", type=['png', 'jpg', 'jpeg'])
@@ -828,46 +981,93 @@ with tab5:
 if st.session_state.parsed_data:
     st.markdown("---")
     st.header("📊 解析結果の確認・編集")
-    st.write("以下のテーブルでデータを確認・編集できます。編集後は「ラベルを生成」ボタンを押してください。")
+    st.write("以下のテーブルでデータを確認・編集できます。規格を変更すると入数・合計数量が再計算されます。編集後は「ラベルを生成」ボタンを押してください。")
     df_data = []
     for entry in st.session_state.parsed_data:
+        item_name = entry.get('item', '')
+        normalized_item = normalize_item_name(item_name)
+        spec_raw = entry.get('spec', '') or ''
+        spec_s = str(spec_raw).strip() if spec_raw is not None else ''
         unit = safe_int(entry.get('unit', 0))
         boxes = safe_int(entry.get('boxes', 0))
         remainder = safe_int(entry.get('remainder', 0))
-        if unit == 0:
-            item_name = entry.get('item', '')
-            normalized_item = normalize_item_name(item_name)
-            item_setting = get_item_setting(normalized_item or item_name, entry.get("spec"))
-            default_unit = item_setting.get("default_unit", 0)
-            if default_unit > 0:
-                unit = default_unit
+        effective_unit = get_effective_unit_size(normalized_item or item_name, spec_s)
+        # 「胡瓜バラ100×10」でAIが数量を10だけ返した場合: unit=10, boxes=0, remainder=0 → 入数100×単位数10=1000に補正
+        if effective_unit > 0 and unit > 0 and unit < effective_unit and boxes == 0 and remainder == 0:
+            unit = effective_unit
+            boxes = safe_int(entry.get('unit', 0))
+            remainder = 0
+        if unit == 0 and effective_unit > 0:
+            unit = effective_unit
         total_quantity = (unit * boxes) + remainder
         df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': entry.get('spec', ''), '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
     edited_df = st.data_editor(df, width="stretch", num_rows="dynamic",
         column_config={'店舗名': st.column_config.SelectboxColumn('店舗名', options=load_stores(), required=True), '品目': st.column_config.TextColumn('品目', required=True), '規格': st.column_config.TextColumn('規格'), '入数(unit)': st.column_config.NumberColumn('入数(unit)', min_value=0, step=1), '箱数(boxes)': st.column_config.NumberColumn('箱数(boxes)', min_value=0, step=1), '端数(remainder)': st.column_config.NumberColumn('端数(remainder)', min_value=0, step=1), '合計数量': st.column_config.NumberColumn('合計数量', disabled=True)})
-    edited_df['合計数量'] = edited_df['入数(unit)'] * edited_df['箱数(boxes)'] + edited_df['端数(remainder)']
+    # 規格変更時: 入数をマスタ／規格名から再設定し、合計数量を再計算（num_rows=dynamic で追加行がある場合は idx>=len(df) で orig_row は None）
+    for idx, row in edited_df.iterrows():
+        spec_val = row.get('規格')
+        if pd.isna(spec_val):
+            spec_val = ''
+        else:
+            spec_val = str(spec_val).strip()
+        orig_row = df.iloc[idx] if idx < len(df) else None
+        orig_spec = ''
+        if orig_row is not None:
+            ospec = orig_row.get('規格')
+            orig_spec = '' if pd.isna(ospec) else str(ospec).strip()
+        if spec_val != orig_spec:
+            eff = get_effective_unit_size(normalize_item_name(row.get('品目', '')) or row.get('品目', ''), spec_val)
+            if eff > 0:
+                edited_df.at[idx, '入数(unit)'] = eff
+    u = edited_df['入数(unit)'].fillna(0)
+    b = edited_df['箱数(boxes)'].fillna(0)
+    r = edited_df['端数(remainder)'].fillna(0)
+    edited_df['合計数量'] = (u * b + r).astype(int)
     df_for_compare = df.drop(columns=['合計数量'])
     edited_df_for_compare = edited_df.drop(columns=['合計数量'])
     if not df_for_compare.equals(edited_df_for_compare):
         updated_data = []
         for _, row in edited_df.iterrows():
-            normalized_item = normalize_item_name(row['品目'])
-            validated_store = validate_store_name(row['店舗名']) or row['店舗名']
+            normalized_item = normalize_item_name(row.get('品目', '') or '')
+            validated_store = validate_store_name(row.get('店舗名', '') or '') or (row.get('店舗名', '') or '')
             try:
-                spec_value = row['規格']
+                spec_value = row.get('規格')
                 if pd.isna(spec_value) or spec_value is None:
                     spec_value = ''
                 else:
                     spec_value = str(spec_value).strip()
             except (KeyError, TypeError):
                 spec_value = ''
-            unit_val = int(row['入数(unit)'])
+            unit_val = safe_int(row.get('入数(unit)', 0))
+            boxes_val = safe_int(row.get('箱数(boxes)', 0))
+            remainder_val = safe_int(row.get('端数(remainder)', 0))
             if unit_val > 0:
-                set_unit(normalized_item or row['品目'], spec_value, validated_store, unit_val)
-            updated_data.append({'store': validated_store, 'item': normalized_item, 'spec': spec_value, 'unit': unit_val, 'boxes': int(row['箱数(boxes)']), 'remainder': int(row['端数(remainder)'])})
+                set_unit(normalized_item or (row.get('品目') or ''), spec_value, validated_store, unit_val)
+            updated_data.append({'store': validated_store, 'item': normalized_item, 'spec': spec_value, 'unit': unit_val, 'boxes': boxes_val, 'remainder': remainder_val})
         st.session_state.parsed_data = updated_data
         st.info("✅ データを更新しました。PDFを生成する場合は下のボタンを押してください。")
+    # バリデーション: 最小出荷単位・規格マスタ不一致（品目が空の行はスキップ）
+    validation_errors = []
+    for idx, row in edited_df.iterrows():
+        item = (row.get('品目') or '').strip()
+        if not item:
+            continue
+        spec = row.get('規格')
+        spec = '' if pd.isna(spec) else str(spec).strip()
+        total_q = safe_int(row.get('合計数量', 0)) if pd.notna(row.get('合計数量')) else 0
+        norm_item = normalize_item_name(item) or item
+        min_q = get_min_shipping_unit(norm_item, spec)
+        if min_q > 0 and total_q > 0 and total_q < min_q:
+            validation_errors.append(f"行{idx+1}（{item} {spec or '規格なし'}）: 合計数量 {total_q} は最小出荷単位（{min_q}）を下回っています。")
+        if not is_spec_in_master(norm_item, spec):
+            known = get_known_specs_for_item(norm_item)
+            if known:
+                validation_errors.append(f"行{idx+1}（{item}）: 規格「{spec or '(空)'}」はマスタにありません。登録済み: {', '.join(s or '（規格なし）' for s in known)}。必要なら設定で追加するか、規格を修正してください。")
+    if validation_errors:
+        st.warning("⚠️ 以下の確認をお願いします：")
+        for msg in validation_errors:
+            st.markdown(f"- {msg}")
     st.divider()
     st.subheader("📋 納品データ形式（台帳用）")
     st.caption("持込入力と同一形式に変換してプレビュー・CSV出力・スプレッドシート追記ができます。")
@@ -893,42 +1093,29 @@ if st.session_state.parsed_data:
         except Exception:
             secrets_obj = None
         if is_sheet_configured(secrets_obj):
-            st.caption("Google スプレッドシートに追記する場合: スプレッドシートIDを入力して「納品データシートに追記」または「台帳に追記（未確定）」を押してください。")
+            st.caption("台帳にデータを保存すると、ステータス「未確定」で台帳データシートに追記されます（二重管理なし・台帳一元化）。")
             _sid = ""
             try:
                 if secrets_obj is not None and hasattr(secrets_obj, "get"):
                     _sid = secrets_obj.get("DELIVERY_SPREADSHEET_ID", "") or getattr(secrets_obj, "DELIVERY_SPREADSHEET_ID", "")
             except Exception:
                 pass
-            sheet_id = st.text_input("スプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, placeholder="URLの /d/ と /edit の間の文字列", key="delivery_sheet_id")
-            ledger_sheet_name = st.text_input("台帳シート名（台帳用の場合）", value="台帳データ", placeholder="例: シート1 または 台帳データ", key="ledger_sheet_name")
-            col_append1, col_append2 = st.columns(2)
-            with col_append1:
-                if st.button("📤 納品データシートに追記", key="append_sheet_btn"):
-                    sid_stripped = (sheet_id or "").strip()
-                    if sid_stripped:
-                        ok, msg = append_delivery_rows(sid_stripped, delivery_rows, sheet_name="納品データ", st_secrets=secrets_obj)
+            sheet_id = st.text_input("台帳のスプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, key="delivery_sheet_id")
+            ledger_sheet_name = st.text_input("台帳シート名", value="台帳データ", key="ledger_sheet_name")
+            if st.button("📤 台帳にデータを保存", type="primary", key="append_ledger_btn"):
+                sid_stripped = (sheet_id or "").strip()
+                if sid_stripped:
+                    ledger_rows = v2_result_to_ledger_rows(parsed, delivery_date=d_date or default_delivery, farmer=(farmer_name or "").strip())
+                    if ledger_rows:
+                        ok, msg = append_ledger_rows(sid_stripped, ledger_rows, sheet_name=(ledger_sheet_name or "台帳データ").strip() or "台帳データ", st_secrets=secrets_obj)
                         if ok:
                             st.success(msg)
                         else:
                             st.error(msg)
                     else:
-                        st.warning("スプレッドシートIDを入力してください。")
-            with col_append2:
-                if st.button("📤 台帳に追記（未確定）", key="append_ledger_btn"):
-                    sid_stripped = (sheet_id or "").strip()
-                    if sid_stripped:
-                        ledger_rows = v2_result_to_ledger_rows(parsed, delivery_date=d_date or default_delivery, farmer=(farmer_name or "").strip())
-                        if ledger_rows:
-                            ok, msg = append_ledger_rows(sid_stripped, ledger_rows, sheet_name=(ledger_sheet_name or "台帳データ").strip() or "台帳データ", st_secrets=secrets_obj)
-                            if ok:
-                                st.success(msg)
-                            else:
-                                st.error(msg)
-                        else:
-                            st.warning("変換できる行がありません。")
-                    else:
-                        st.warning("スプレッドシートIDを入力してください。")
+                        st.warning("変換できる行がありません。")
+                else:
+                    st.warning("スプレッドシートIDを入力してください。")
         else:
             st.caption("💡 スプレッドシートへ追記するには .streamlit/secrets.toml に [gcp] を設定するか、GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
     st.divider()
