@@ -256,10 +256,27 @@ if nav_role == NAV_OFFICE:
         stores_master = load_stores()
         spec_master = load_item_spec_master()
         items_master = sorted(set((r.get("品目") or "").strip() for r in spec_master if (r.get("品目") or "").strip()))
-        specs_master = sorted(set((r.get("規格") or "").strip() for r in spec_master if (r.get("規格") or "").strip() is not None))
         stores_options = ["（すべて）"] + stores_master
         items_options = ["（すべて）"] + items_master
-        specs_options = ["（すべて）"] + specs_master
+
+        # 品目名「胡瓜バラ」等は台帳では 品目=胡瓜・規格=バラ と分けて保存されていることがあるため、その組み合わせでもマッチさせる
+        def _item_spec_for_composite(selected_item: str):
+            if not selected_item or selected_item == "（すべて）":
+                return None
+            s = selected_item.strip()
+            # 胡瓜: 胡瓜バラ→(胡瓜,バラ), 胡瓜平箱→(胡瓜,平箱)
+            # 長ネギ: 長ねぎバラ/長ネギバラ→(長ネギ,バラ)。春菊・青梗菜は単品のみなので不要
+            _map = {
+                "胡瓜バラ": ("胡瓜", "バラ"),
+                "胡瓜平箱": ("胡瓜", "平箱"),
+                "長ねぎバラ": ("長ネギ", "バラ"),
+                "長ネギバラ": ("長ネギ", "バラ"),
+            }
+            return _map.get(s)
+
+        def _norm_d(s):
+            if s is None or s == "": return ""
+            return str(s).strip().replace("-", "/")
 
         st.subheader("絞り込み")
         c1, c2, c3, c4 = st.columns(4)
@@ -270,15 +287,12 @@ if nav_role == NAV_OFFICE:
             filter_store = st.selectbox("納品先", options=stores_options, key="office_filter_store")
         with c3:
             filter_item = st.selectbox("品目", options=items_options, key="office_filter_item")
-        with c4:
-            filter_spec = st.selectbox("規格", options=specs_options, key="office_filter_spec")
 
-        def _norm_d(s):
-            if s is None or s == "": return ""
-            return str(s).strip().replace("-", "/")
         date_from_s = _norm_d(date_from.strftime("%Y-%m-%d"))
         date_to_s = _norm_d(date_to.strftime("%Y-%m-%d"))
-        filtered = []
+        # 日付・納品先・品目で絞った行から規格の選択肢を生成（データに存在する規格だけ表示）
+        filtered_by_date_store_item = []
+        composite = _item_spec_for_composite(filter_item)
         for r in rows_raw:
             d = _norm_d(r.get("納品日付", ""))
             if date_from_s and d < date_from_s:
@@ -289,10 +303,25 @@ if nav_role == NAV_OFFICE:
             if filter_store and filter_store != "（すべて）" and store != filter_store:
                 continue
             item = (r.get("品目") or "").strip()
-            if filter_item and filter_item != "（すべて）" and item != filter_item:
-                continue
             spec = (r.get("規格") or "").strip()
-            if filter_spec and filter_spec != "（すべて）" and spec != filter_spec:
+            if filter_item and filter_item != "（すべて）":
+                if composite:
+                    base_item, base_spec = composite
+                    if not ((item == base_item and spec == base_spec) or item == filter_item):
+                        continue
+                elif item != filter_item:
+                    continue
+            filtered_by_date_store_item.append(r)
+        specs_in_data = sorted(set((r.get("規格") or "").strip() for r in filtered_by_date_store_item))
+        specs_options = ["（すべて）"] + [s if s else "（規格なし）" for s in specs_in_data]
+        with c4:
+            filter_spec = st.selectbox("規格", options=specs_options, key="office_filter_spec")
+
+        filtered = []
+        for r in filtered_by_date_store_item:
+            spec = (r.get("規格") or "").strip()
+            spec_display = spec if spec else "（規格なし）"
+            if filter_spec and filter_spec != "（すべて）" and spec_display != filter_spec:
                 continue
             filtered.append(r)
 
@@ -878,15 +907,23 @@ with tab5:
     item_settings = load_item_settings()
     box_count_items = get_box_count_items()
     spec_master = load_item_spec_master()
+    # 品目名から規格の既定値（既存の慣例）。マスタで規格が空のとき表示・保存で使う
+    def _default_spec_for_item(item_name: str) -> str:
+        s = (item_name or "").strip()
+        _defaults = {"胡瓜バラ": "バラ", "胡瓜平箱": "平箱", "長ねぎバラ": "バラ", "長ネギバラ": "バラ"}
+        return _defaults.get(s, "")
     if spec_master:
         master_rows = []
         for r in spec_master:
             u = r.get("default_unit", 0)
             t = r.get("unit_type", "袋")
             as_boxes = r.get("receive_as_boxes", False)
+            spec = (r.get("規格") or "").strip()
+            if not spec:
+                spec = _default_spec_for_item(r.get("品目", ""))
             master_rows.append({
                 "品目": r.get("品目", ""),
-                "規格": r.get("規格", ""),
+                "規格": spec,
                 "1コンテナあたりの入数": u,
                 "単位": t,
                 "受信方法": "箱数" if as_boxes else "総数",
@@ -902,6 +939,7 @@ with tab5:
                     "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True),
                 })
             if st.button("💾 マスターデータを保存", key="save_master_btn", type="primary"):
+                key_to_orig = {((r.get("品目") or "").strip(), (r.get("規格") or "").strip()): r for r in spec_master}
                 out_rows = []
                 for _, row in edited_master.iterrows():
                     name = str(row.get("品目", "")).strip()
@@ -909,7 +947,9 @@ with tab5:
                     u = int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30
                     t = str(row["単位"]).strip() or "袋"
                     as_boxes = str(row["受信方法"]).strip() == "箱数"
-                    out_rows.append({"品目": name, "規格": spec, "default_unit": u, "unit_type": t, "receive_as_boxes": as_boxes})
+                    orig = key_to_orig.get((name, spec)) or key_to_orig.get((name, ""))
+                    min_ship = int(orig.get("min_shipping_unit", 0)) or 0 if orig else 0
+                    out_rows.append({"品目": name, "規格": spec, "default_unit": u, "unit_type": t, "receive_as_boxes": as_boxes, "min_shipping_unit": min_ship})
                 save_item_spec_master(out_rows)
                 st.success("✅ マスターデータを保存しました。")
                 st.rerun()
