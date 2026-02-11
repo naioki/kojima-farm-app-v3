@@ -367,6 +367,55 @@ def update_ledger_row_by_id(
     return True, "1行を更新しました。"
 
 
+# 事務用で単価・金額を扱うために台帳に必要な列名
+_LEDGER_PRICE_COLUMNS = ["納品単価", "納品金額", "ステータス"]
+
+
+def ensure_ledger_price_columns(
+    spreadsheet_id: str,
+    sheet_name: str = "台帳データ",
+    credentials=None,
+    st_secrets=None,
+) -> Tuple[bool, str]:
+    """
+    台帳シートに「納品単価」「納品金額」「ステータス」列がなければ、末尾に追加する。
+    すでにある場合は何もしない。
+    Returns: (成功可否, メッセージ)
+    """
+    sid = (spreadsheet_id or "").strip()
+    if not sid or not _validate_spreadsheet_id(sid):
+        return False, "スプレッドシートIDが不正です。"
+    sheet_name_s = (sheet_name or "台帳データ").strip() or "台帳データ"
+    creds = credentials or _get_credentials(st_secrets)
+    if creds is None:
+        return False, "Google スプレッドシート用の認証が設定されていません。"
+    try:
+        import gspread
+    except ImportError:
+        return False, "gspread がインストールされていません。"
+    try:
+        client = gspread.authorize(creds)
+        workbook = client.open_by_key(sid)
+        sheet = workbook.worksheet(sheet_name_s)
+        all_values = sheet.get_all_values()
+    except Exception as e:
+        return False, f"スプレッドシートの取得に失敗しました: {str(e)}"
+    if not all_values:
+        return False, "シートにデータがありません。"
+    header = [str(h).strip() for h in all_values[0]]
+    missing = [c for c in _LEDGER_PRICE_COLUMNS if c not in header]
+    if not missing:
+        return True, "すでに「納品単価」「納品金額」「ステータス」列があります。"
+    try:
+        sheet.add_cols(len(missing))
+        for i, col_name in enumerate(missing):
+            # 1-based: 新しい列は len(header)+1 から
+            sheet.update_cell(1, len(header) + 1 + i, col_name)
+    except Exception as e:
+        return False, f"列の追加に失敗しました: {str(e)}"
+    return True, f"台帳に「{'」「'.join(missing)}」列を追加しました。"
+
+
 def set_ledger_rows_confirmed(
     spreadsheet_id: str,
     sheet_name: str,

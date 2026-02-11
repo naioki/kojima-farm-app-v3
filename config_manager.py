@@ -279,9 +279,10 @@ def load_item_spec_master() -> List[Dict[str, Any]]:
     settings = load_item_settings()
     rows = []
     for name, s in settings.items():
+        default_spec = get_default_spec_for_item(name)
         rows.append({
             "品目": name,
-            "規格": "",
+            "規格": default_spec,
             "default_unit": s.get("default_unit", 0),
             "unit_type": s.get("unit_type", "袋"),
             "receive_as_boxes": s.get("receive_as_boxes", False),
@@ -385,6 +386,17 @@ def get_min_shipping_unit(item: str, spec: Optional[str] = None) -> int:
     """品目（と規格）ごとの最小出荷単位。未設定なら 0（チェックしない）。"""
     setting = get_item_setting(item, spec)
     return int(setting.get("min_shipping_unit", 0)) or 0
+
+
+def get_default_spec_for_item(item_name: str) -> str:
+    """品目名に対する規格の既定表示値。品目名管理で規格が空のときに表示・保存で使う。"""
+    s = (item_name or "").strip()
+    _defaults = {
+        "胡瓜": "バラ", "胡瓜バラ": "バラ", "胡瓜平箱": "平箱",
+        "長ネギ": "バラ", "長ねぎ": "バラ", "長ねぎバラ": "バラ", "長ネギバラ": "バラ",
+        "春菊": "1束", "青梗菜": "2~3株",
+    }
+    return _defaults.get(s, "")
 
 
 def get_known_specs_for_item(item: str) -> List[str]:

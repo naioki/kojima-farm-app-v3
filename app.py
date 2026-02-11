@@ -24,12 +24,13 @@ from config_manager import (
     load_item_settings, save_item_settings, get_item_setting, set_item_setting, set_item_receive_as_boxes, remove_item_setting,
     load_item_spec_master, save_item_spec_master,
     DEFAULT_ITEM_SETTINGS, get_box_count_items,
-    get_effective_unit_size, get_min_shipping_unit, get_known_specs_for_item, is_spec_in_master,
+    get_effective_unit_size, get_min_shipping_unit, get_known_specs_for_item, is_spec_in_master, get_default_spec_for_item,
 )
 from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
 from delivery_converter import v2_result_to_delivery_rows, v2_result_to_ledger_rows, ledger_rows_to_v2_format_with_units
-from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, set_ledger_rows_confirmed, is_sheet_configured
+from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, set_ledger_rows_confirmed, is_sheet_configured, ensure_ledger_price_columns
+from error_display_util import format_error_display
 try:
     from delivery_sheet_writer import fetch_ledger_confirmed_dates
 except ImportError:
@@ -222,7 +223,7 @@ with st.sidebar:
 # 事務用：請求管理（単価一括入力）— APIキー不要
 if nav_role == NAV_OFFICE:
     st.title("📋 事務用：請求管理")
-    st.caption("台帳データの「納品単価」が未入力の行に単価を一括入力し、納品金額を再計算して反映します。")
+    st.caption("台帳データを行ごとに取得し、日付・納品先・品目・規格で絞り込んだうえで、単価や数量を一括で変更して反映できます。")
     try:
         secrets_obj_office = getattr(st, "secrets", None)
     except Exception:
@@ -238,18 +239,52 @@ if nav_role == NAV_OFFICE:
         pass
     ledger_id_office = st.text_input("台帳のスプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, key="office_ledger_id")
     ledger_sheet_office = st.text_input("シート名", value="台帳データ", key="office_ledger_sheet")
-    if st.button("納品単価が0または空の行を取得", type="primary", key="office_fetch_btn"):
+    st.info("台帳に「納品単価」「納品金額」列がない場合は、下の「台帳に価格列を追加」を押すと、シートの末尾に「納品単価」「納品金額」「ステータス」列を追加します。")
+    if st.button("台帳に価格列を追加", type="secondary", key="office_ensure_cols_btn"):
         sid = (ledger_id_office or "").strip()
         if sid:
-            ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
+            ok, msg = ensure_ledger_price_columns(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", st_secrets=secrets_obj_office)
             if ok:
-                st.session_state.office_zero_unit_rows = rows
                 st.success(msg)
-                st.rerun()
             else:
                 st.error(msg)
         else:
             st.warning("スプレッドシートIDを入力してください。")
+    st.caption("取得する納品日付範囲（「日付範囲で行を取得」で使用。絞り込みにも使います）")
+    office_col1, office_col2 = st.columns(2)
+    with office_col1:
+        office_date_from = st.date_input("納品日付（から）", value=datetime.now().date() - timedelta(days=30), key="office_date_from")
+    with office_col2:
+        office_date_to = st.date_input("納品日付（まで）", value=datetime.now().date(), key="office_date_to")
+    office_fetch_col1, office_fetch_col2 = st.columns(2)
+    with office_fetch_col1:
+        if st.button("納品単価が0または空の行を取得", type="secondary", key="office_fetch_btn"):
+            sid = (ledger_id_office or "").strip()
+            if sid:
+                ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
+                if ok:
+                    st.session_state.office_zero_unit_rows = rows
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+            else:
+                st.warning("スプレッドシートIDを入力してください。")
+    with office_fetch_col2:
+        if st.button("指定した日付範囲で行を取得", type="primary", key="office_fetch_by_date_btn"):
+            sid = (ledger_id_office or "").strip()
+            if sid:
+                date_f_s = office_date_from.strftime("%Y/%m/%d")
+                date_t_s = office_date_to.strftime("%Y/%m/%d")
+                ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=False, delivery_date_from=date_f_s, delivery_date_to=date_t_s, st_secrets=secrets_obj_office)
+                if ok:
+                    st.session_state.office_zero_unit_rows = rows
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+            else:
+                st.warning("スプレッドシートIDを入力してください。")
 
     if st.session_state.get("office_zero_unit_rows"):
         rows_raw = st.session_state.office_zero_unit_rows
@@ -279,17 +314,17 @@ if nav_role == NAV_OFFICE:
             return str(s).strip().replace("-", "/")
 
         st.subheader("絞り込み")
+        st.caption("日付範囲は上で指定した「納品日付（から／まで）」で絞り込んでいます。変更する場合は上で日付を変えてください。")
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            date_from = st.date_input("納品日付（から）", value=datetime.now().date() - timedelta(days=30), key="office_date_from")
-            date_to = st.date_input("納品日付（まで）", value=datetime.now().date(), key="office_date_to")
+            st.write("日付: " + office_date_from.strftime("%Y-%m-%d") + " ～ " + office_date_to.strftime("%Y-%m-%d"))
         with c2:
             filter_store = st.selectbox("納品先", options=stores_options, key="office_filter_store")
         with c3:
             filter_item = st.selectbox("品目", options=items_options, key="office_filter_item")
 
-        date_from_s = _norm_d(date_from.strftime("%Y-%m-%d"))
-        date_to_s = _norm_d(date_to.strftime("%Y-%m-%d"))
+        date_from_s = _norm_d(office_date_from.strftime("%Y-%m-%d"))
+        date_to_s = _norm_d(office_date_to.strftime("%Y-%m-%d"))
         # 日付・納品先・品目で絞った行から規格の選択肢を生成（データに存在する規格だけ表示）
         filtered_by_date_store_item = []
         composite = _item_spec_for_composite(filter_item)
@@ -337,7 +372,11 @@ if nav_role == NAV_OFFICE:
         if "選択" not in df_office.columns:
             df_office["選択"] = False
 
+        sheet_display = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
+        sid_display = (ledger_id_office or "").strip()
+        sid_short = (sid_display[:12] + "…") if len(sid_display) > 12 else sid_display
         st.subheader("対象データ（編集・チェック後は下の一括適用を利用）")
+        st.info(f"**適用先シート**: スプレッドシート ID `{sid_short}` の **「{sheet_display}」** に一括適用されます。（上で取得時に指定したID・シート名です）")
         col_config_office = {}
         for col in df_office.columns:
             if col == "選択":
@@ -353,6 +392,7 @@ if nav_role == NAV_OFFICE:
         edited_office_df = st.data_editor(df_office, width="stretch", hide_index=True, column_config=col_config_office, key="office_data_editor")
 
         st.subheader("一括更新")
+        st.caption(f"適用先: シート「{sheet_display}」（スプレッドシート ID: {sid_short}）")
         apply_price = st.number_input("適用する単価", min_value=0, value=0, step=1, key="office_apply_price")
         if st.button("選択した行に一括適用", type="primary", key="office_apply_btn"):
             if apply_price <= 0:
@@ -531,7 +571,7 @@ with tab2:
                     else:
                         st.info("新しいメールは見つかりませんでした。")
                 except Exception as e:
-                    st.error(f"メールチェックエラー: {e}")
+                    st.error(format_error_display(e, "メールチェック"))
                     with st.expander("🔍 詳細"):
                         st.code(traceback.format_exc(), language="python")
     with col2:
@@ -832,7 +872,7 @@ with tab4:
                                 pass
                         st.success("✅ PDFを生成しました。上のボタンからダウンロードしてください。")
                     except Exception as e:
-                        st.error(f"PDF生成エラー: {e}")
+                        st.error(format_error_display(e, "PDF生成"))
                         with st.expander("詳細"):
                             st.code(traceback.format_exc(), language="python")
                 else:
@@ -907,11 +947,6 @@ with tab5:
     item_settings = load_item_settings()
     box_count_items = get_box_count_items()
     spec_master = load_item_spec_master()
-    # 品目名から規格の既定値（既存の慣例）。マスタで規格が空のとき表示・保存で使う
-    def _default_spec_for_item(item_name: str) -> str:
-        s = (item_name or "").strip()
-        _defaults = {"胡瓜バラ": "バラ", "胡瓜平箱": "平箱", "長ねぎバラ": "バラ", "長ネギバラ": "バラ"}
-        return _defaults.get(s, "")
     if spec_master:
         master_rows = []
         for r in spec_master:
@@ -920,7 +955,7 @@ with tab5:
             as_boxes = r.get("receive_as_boxes", False)
             spec = (r.get("規格") or "").strip()
             if not spec:
-                spec = _default_spec_for_item(r.get("品目", ""))
+                spec = get_default_spec_for_item(r.get("品目", ""))
             master_rows.append({
                 "品目": r.get("品目", ""),
                 "規格": spec,
@@ -1140,7 +1175,7 @@ if st.session_state.parsed_data:
         try:
             delivery_rows = v2_result_to_delivery_rows(parsed, delivery_date=d_date or default_delivery, carry_date=(c_date or d_date or default_delivery), farmer=(farmer_name or "").strip())
         except Exception as e:
-            st.warning(f"変換エラー: {e}")
+            st.warning(format_error_display(e, "変換"))
     if delivery_rows:
         df_delivery = pd.DataFrame(delivery_rows)
         st.dataframe(df_delivery, width="stretch", hide_index=True)
@@ -1189,7 +1224,7 @@ if st.session_state.parsed_data:
                 else:
                     st.error("❌ ラベルを生成できませんでした。")
             except Exception as e:
-                st.error(f"❌ ラベル生成エラー: {e}")
+                st.error(format_error_display(e, "ラベル生成"))
                 st.exception(e)
 
 if st.session_state.labels and st.session_state.parsed_data:
@@ -1215,7 +1250,7 @@ if st.session_state.labels and st.session_state.parsed_data:
             line_text = generate_line_summary(final_data)
             st.code(line_text, language="text")
         except Exception as e:
-            st.error(f"❌ PDF生成エラー: {e}")
+            st.error(format_error_display(e, "PDF生成"))
             with st.expander("🔍 詳細"):
                 st.code(traceback.format_exc(), language="python")
 

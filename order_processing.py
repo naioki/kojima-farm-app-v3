@@ -16,6 +16,7 @@ from config_manager import (
     lookup_unit, get_item_setting, add_unit_if_new,
     get_effective_unit_size,
 )
+from error_display_util import format_error_display
 
 def safe_int(v):
     if v is None:
@@ -127,11 +128,11 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
             result = [result]
         return result
     except json.JSONDecodeError as e:
-        st.error(f"JSON解析エラー: {e}")
+        st.error(format_error_display(e, "JSON解析"))
         st.text(f"レスポンス内容: {text[:500]}")
         return None
     except Exception as e:
-        st.error(f"画像解析エラー: {e}")
+        st.error(format_error_display(e, "画像解析"))
         return None
 
 def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list:
@@ -196,7 +197,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
             result = [result]
         return result
     except Exception as e:
-        st.error(f"テキスト解析エラー: {e}")
+        st.error(format_error_display(e, "テキスト解析"))
         return None
 
 def validate_and_fix_order_data(order_data, auto_learn=True):
