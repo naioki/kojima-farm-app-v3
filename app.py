@@ -1064,6 +1064,8 @@ if st.session_state.parsed_data:
         normalized_item = normalize_item_name(item_name)
         spec_raw = entry.get('spec', '') or ''
         spec_s = str(spec_raw).strip() if spec_raw is not None else ''
+        if spec_s.lower() in ('none', 'nan'):
+            spec_s = ''
         # 規格が空のときの自動入力: (1) 品目が胡瓜バラ/胡瓜平箱/長ねぎバラならバラ・平箱を補う (2) マスタに非空規格が1つだけならそれを使う
         if not spec_s and (normalized_item or item_name):
             item_key = (normalized_item or item_name).strip()
@@ -1162,6 +1164,8 @@ if st.session_state.parsed_data:
                     spec_value = ''
                 else:
                     spec_value = str(spec_value).strip()
+                if spec_value.lower() in ('none', 'nan'):
+                    spec_value = ''
             except (KeyError, TypeError):
                 spec_value = ''
             unit_val = safe_int(row.get('入数(unit)', 0))
@@ -1180,6 +1184,8 @@ if st.session_state.parsed_data:
             continue
         spec = row.get('規格')
         spec = '' if pd.isna(spec) else str(spec).strip()
+        if spec.lower() in ('none', 'nan'):
+            spec = ''
         total_q = safe_int(row.get('合計数量', 0)) if pd.notna(row.get('合計数量')) else 0
         norm_item = normalize_item_name(item) or item
         min_q = get_min_shipping_unit(norm_item, spec)
@@ -1188,9 +1194,9 @@ if st.session_state.parsed_data:
         if not is_spec_in_master(norm_item, spec):
             known = get_known_specs_for_item(norm_item)
             if known:
-                validation_errors.append(f"行{idx+1}（{item}）: 規格「{spec or '(空)'}」はマスタにありません。登録済み: {', '.join(s or '（規格なし）' for s in known)}。必要なら設定で追加するか、規格を修正してください。")
+                validation_errors.append(f"行{idx+1}（{item}）: 規格「{spec or '(空)'}」はマスタに未登録です。登録済み: {', '.join(s or '（規格なし）' for s in known)}。PDFはそのまま生成できます。必要なら「設定管理」の品目名管理で追加してください。")
     if validation_errors:
-        st.warning("⚠️ 以下の確認をお願いします：")
+        st.warning("⚠️ 以下の確認をお願いします（PDFはそのまま生成できます）：")
         for msg in validation_errors:
             st.markdown(f"- {msg}")
     st.divider()

@@ -34,6 +34,30 @@ def get_item_normalization():
     return load_items()
 
 
+def normalize_spec_from_parse(spec_str: str) -> str:
+    """
+    メール・画像解析で得た規格を、品目名管理マスタに合わせて正規化する。
+    - ばら / バラ → バラ
+    - 平箱 → 平箱
+    - N本（数字+本）→ そのまま（3本, 2本, 50本など）
+    - 上記以外は前後空白を取って返す
+    """
+    if spec_str is None:
+        return ""
+    s = str(spec_str).strip()
+    if not s:
+        return ""
+    # ひらがな「ばら」→「バラ」
+    if s in ("ばら", "バラ"):
+        return "バラ"
+    if s == "平箱":
+        return "平箱"
+    # 数字+本（2本, 3本, 50本など）はそのまま
+    if re.match(r"^\d+本$", s):
+        return s
+    return s
+
+
 def _build_spec_master_prompt_sections():
     """
     品目名管理（品目+規格マスタ）から、Geminiプロンプト用の文字列を組み立てる。
@@ -159,6 +183,9 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
         result = json.loads(text)
         if isinstance(result, dict):
             result = [result]
+        for entry in result:
+            if isinstance(entry, dict) and "spec" in entry:
+                entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
         return result
     except json.JSONDecodeError as e:
         st.error(format_error_display(e, "JSON解析"))
@@ -231,6 +258,9 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
         result = json.loads(text_resp)
         if isinstance(result, dict):
             result = [result]
+        for entry in result:
+            if isinstance(entry, dict) and "spec" in entry:
+                entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
         return result
     except Exception as e:
         st.error(format_error_display(e, "テキスト解析"))
