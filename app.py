@@ -360,25 +360,28 @@ if nav_role == NAV_OFFICE:
         df_office = pd.DataFrame(filtered)
         if "選択" not in df_office.columns:
             df_office["選択"] = False
-        # 一括選択ボタンが押された場合は全行を選択状態にする（data_editorのキャッシュを消して反映させる）
+        # 一括選択ボタンが押された場合: ソースデータとdfの両方で選択=Trueにし、data_editorのキーを変えて新規描画させる
         if st.session_state.get("office_select_all"):
+            for r in filtered:
+                r["選択"] = True
             df_office["選択"] = True
             del st.session_state["office_select_all"]
             if "office_data_editor" in st.session_state:
                 del st.session_state["office_data_editor"]
+            st.session_state["office_data_editor_key_suffix"] = (st.session_state.get("office_data_editor_key_suffix", 0) + 1) % 100000
 
         sheet_display = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
         sid_display = (ledger_id_office or "").strip()
         sid_short = (sid_display[:12] + "…") if len(sid_display) > 12 else sid_display
         st.subheader("対象データ（編集・チェック後は下の一括適用を利用）")
         st.info(f"**適用先シート**: スプレッドシート ID `{sid_short}` の **「{sheet_display}」** に一括適用されます。（上で取得時に指定したID・シート名です）")
-        if st.button("すべて選択", help="表示中の対象データをすべて選択します", key="office_select_all_btn"):
+        if st.button("すべて選択", help="表示中の対象データをすべて選択します（選択列にチェックを入れます）", key="office_select_all_btn"):
             st.session_state.office_select_all = True
             st.rerun()
         col_config_office = {}
         for col in df_office.columns:
             if col == "選択":
-                col_config_office[col] = st.column_config.CheckboxColumn("選択", help="一括適用する行にチェック")
+                col_config_office[col] = st.column_config.CheckboxColumn("選択", help="一括適用する行にチェック（「すべて選択」ボタンで全行にチェック）")
             elif col == "納品単価":
                 col_config_office[col] = st.column_config.NumberColumn("納品単価", min_value=0, step=1)
             elif col == "納品金額":
@@ -387,24 +390,31 @@ if nav_role == NAV_OFFICE:
                 col_config_office[col] = st.column_config.NumberColumn("数量", min_value=0, step=1)
             else:
                 col_config_office[col] = st.column_config.TextColumn(col)
-        edited_office_df = st.data_editor(df_office, width="stretch", hide_index=True, column_config=col_config_office, key="office_data_editor")
+        editor_key = "office_data_editor_" + str(st.session_state.get("office_data_editor_key_suffix", 0))
+        edited_office_df = st.data_editor(df_office, width="stretch", hide_index=True, column_config=col_config_office, key=editor_key)
 
         st.subheader("一括更新")
         st.caption(f"適用先: シート「{sheet_display}」（スプレッドシート ID: {sid_short}）")
         apply_price = st.number_input("適用する単価", min_value=0, value=0, step=1, key="office_apply_price")
+        apply_to_all = st.checkbox("表示中の全行に適用する（選択列のチェックを無視）", value=False, key="office_apply_to_all")
         if st.button("選択した行に一括適用", type="primary", key="office_apply_btn"):
             if apply_price <= 0:
                 st.warning("適用する単価を1以上で入力してください。")
             else:
                 selected_ids = []
                 for idx, row in edited_office_df.iterrows():
-                    ch = row.get("選択")
-                    if ch is True or (isinstance(ch, str) and str(ch).strip().lower() in ("true", "1", "yes")):
+                    if apply_to_all:
                         did = row.get("納品ID")
                         if did:
                             selected_ids.append((str(did).strip(), row))
+                    else:
+                        ch = row.get("選択")
+                        if ch is True or (isinstance(ch, str) and str(ch).strip().lower() in ("true", "1", "yes")):
+                            did = row.get("納品ID")
+                            if did:
+                                selected_ids.append((str(did).strip(), row))
                 if not selected_ids:
-                    st.warning("一括適用する行にチェックを入れてください。")
+                    st.warning("一括適用する行にチェックを入れるか、「表示中の全行に適用する」にチェックを入れてください。")
                 else:
                     sid = (ledger_id_office or "").strip()
                     sheet_s = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
