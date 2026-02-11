@@ -776,7 +776,13 @@ with tab4:
     except Exception:
         secrets_obj_pdf = None
     if is_sheet_configured(secrets_obj_pdf):
-        ledger_id_pdf = st.text_input("台帳のスプレッドシートID", value=DEFAULT_LEDGER_SPREADSHEET_ID, key="ledger_pdf_id")
+        _sid_pdf = ""
+        try:
+            if secrets_obj_pdf and hasattr(secrets_obj_pdf, "get"):
+                _sid_pdf = secrets_obj_pdf.get("DELIVERY_SPREADSHEET_ID", "") or getattr(secrets_obj_pdf, "DELIVERY_SPREADSHEET_ID", "")
+        except Exception:
+            pass
+        ledger_id_pdf = st.text_input("台帳のスプレッドシートID", value=_sid_pdf or DEFAULT_LEDGER_SPREADSHEET_ID, key="ledger_pdf_id")
         ledger_sheet_pdf = st.text_input("シート名", value="台帳データ", key="ledger_pdf_sheet")
 
         pdf_delivery_date = ""
@@ -1091,7 +1097,10 @@ if st.session_state.parsed_data:
         total_quantity = (unit * boxes) + remainder
         df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': spec_s, '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
-    # 品目・規格は選択＋既存値のハイブリッド用に選択肢を組み立て（マスタ＋現在の表の値）
+    # 規格の NaN / "None" を空文字に統一（プルダウンで選択肢にないとエラーになるため）
+    if not df.empty and "規格" in df.columns:
+        df["規格"] = df["規格"].fillna("").astype(str).str.strip().replace("None", "").replace("nan", "")
+    # 品目・規格は選択＋既存値のハイブリッド用に選択肢を組み立て（マスタ＋現在の表の値＋品目別既定規格）
     _items_dict = load_items()
     _item_names = set(_items_dict.keys()) | {v for variants in _items_dict.values() for v in (variants or [])}
     _spec_master = load_item_spec_master()
@@ -1100,6 +1109,11 @@ if st.session_state.parsed_data:
     if not df.empty:
         _item_names |= set(df["品目"].dropna().astype(str).str.strip())
         _spec_names |= set(df["規格"].dropna().astype(str).str.strip())
+        # 春菊→1束・青梗菜→2~3株など品目別既定規格を選択肢に追加（マスタに未登録でも選べるように）
+        for _item in df["品目"].dropna().astype(str).str.strip().unique():
+            _d = get_default_spec_for_item(_item)
+            if _d:
+                _spec_names.add(_d)
     item_options = sorted(x for x in _item_names if x)
     spec_options = [""] + sorted(x for x in _spec_names if x)
     # 品目: 選択肢があればSelectbox（マスタ＋表の既存値）、なければ手入力のTextColumn
