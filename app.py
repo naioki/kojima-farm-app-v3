@@ -29,7 +29,7 @@ from config_manager import (
 from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
 from delivery_converter import v2_result_to_delivery_rows, v2_result_to_ledger_rows, ledger_rows_to_v2_format_with_units
-from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, set_ledger_rows_confirmed, is_sheet_configured, ensure_ledger_price_columns
+from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, set_ledger_rows_confirmed, is_sheet_configured
 from error_display_util import format_error_display
 try:
     from delivery_sheet_writer import fetch_ledger_confirmed_dates
@@ -239,17 +239,6 @@ if nav_role == NAV_OFFICE:
         pass
     ledger_id_office = st.text_input("台帳のスプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, key="office_ledger_id")
     ledger_sheet_office = st.text_input("シート名", value="台帳データ", key="office_ledger_sheet")
-    st.info("台帳に「納品単価」「納品金額」列がない場合は、下の「台帳に価格列を追加」を押すと、シートの末尾に「納品単価」「納品金額」「ステータス」列を追加します。")
-    if st.button("台帳に価格列を追加", type="secondary", key="office_ensure_cols_btn"):
-        sid = (ledger_id_office or "").strip()
-        if sid:
-            ok, msg = ensure_ledger_price_columns(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", st_secrets=secrets_obj_office)
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
-        else:
-            st.warning("スプレッドシートIDを入力してください。")
     st.caption("取得する納品日付範囲（「日付範囲で行を取得」で使用。絞り込みにも使います）")
     office_col1, office_col2 = st.columns(2)
     with office_col1:
@@ -371,12 +360,19 @@ if nav_role == NAV_OFFICE:
         df_office = pd.DataFrame(filtered)
         if "選択" not in df_office.columns:
             df_office["選択"] = False
+        # 一括選択ボタンが押された場合は全行を選択状態にする
+        if st.session_state.get("office_select_all"):
+            df_office["選択"] = True
+            del st.session_state["office_select_all"]
 
         sheet_display = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
         sid_display = (ledger_id_office or "").strip()
         sid_short = (sid_display[:12] + "…") if len(sid_display) > 12 else sid_display
         st.subheader("対象データ（編集・チェック後は下の一括適用を利用）")
         st.info(f"**適用先シート**: スプレッドシート ID `{sid_short}` の **「{sheet_display}」** に一括適用されます。（上で取得時に指定したID・シート名です）")
+        if st.button("すべて選択", help="表示中の対象データをすべて選択します", key="office_select_all_btn"):
+            st.session_state.office_select_all = True
+            st.rerun()
         col_config_office = {}
         for col in df_office.columns:
             if col == "選択":

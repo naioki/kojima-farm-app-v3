@@ -15,6 +15,7 @@ from config_manager import (
     load_item_settings, get_box_count_items,
     lookup_unit, get_item_setting, add_unit_if_new,
     get_effective_unit_size,
+    load_item_spec_master,
 )
 from error_display_util import format_error_display
 
@@ -31,6 +32,40 @@ def get_known_stores():
 
 def get_item_normalization():
     return load_items()
+
+
+def _build_spec_master_prompt_sections():
+    """
+    品目名管理（品目+規格マスタ）から、Geminiプロンプト用の文字列を組み立てる。
+    返す値: (unit_lines, box_count_str, spec_master_section)
+    - unit_lines: 「品目(規格): 入数単位/コンテナ」のリスト（計算ルール用）
+    - box_count_str: 箱数で受信する品目・規格の一覧（「×数字」が箱数の品目）
+    - spec_master_section: プロンプト用の【品目・規格マスタ】ブロック全文
+    """
+    spec_master = load_item_spec_master()
+    unit_parts = []
+    box_items = []
+    table_lines = []
+    for r in spec_master:
+        item = (r.get("品目") or "").strip()
+        spec = (r.get("規格") or "").strip()
+        spec_display = spec if spec else "規格なし"
+        u = int(r.get("default_unit", 0)) or 0
+        t = (r.get("unit_type") or "袋").strip() or "袋"
+        as_boxes = bool(r.get("receive_as_boxes", False))
+        if not item:
+            continue
+        label = f"{item}({spec_display})" if spec else item
+        if u > 0:
+            unit_parts.append(f"- {label}: {u}{t}/コンテナ")
+        table_lines.append(f"- {label}: {u}{t}/コンテナ, 受信方法={'箱数' if as_boxes else '総数'}")
+        if as_boxes:
+            box_items.append(label)
+    unit_lines = "\n".join(unit_parts) if unit_parts else "（品目名管理で入数を登録してください）"
+    box_count_str = "、".join(box_items) if box_items else "（なし）"
+    spec_master_section = "【品目・規格マスタ（読み取り・計算の参照）】\n" + "\n".join(table_lines) if table_lines else ""
+    return unit_lines, box_count_str, spec_master_section
+
 
 def normalize_item_name(item_name, auto_learn=True):
     if not item_name:
@@ -76,10 +111,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     known_stores = get_known_stores()
     item_normalization = get_item_normalization()
     store_list = "、".join(known_stores)
-    item_settings_for_prompt = load_item_settings()
-    box_count_items = get_box_count_items()
-    unit_lines = "\n".join([f"- {name}: {s.get('default_unit', 0)}{s.get('unit_type', '袋')}/コンテナ" for name, s in sorted(item_settings_for_prompt.items()) if s.get("default_unit", 0) > 0])
-    box_count_str = "、".join(box_count_items) if box_count_items else "（なし）"
+    unit_lines, box_count_str, spec_master_section = _build_spec_master_prompt_sections()
     prompt = f"""
     画像を解析し、以下の厳密なルールに従ってJSONで返してください。
     
@@ -90,6 +122,8 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     【品目名の正規化ルール】
     {json.dumps(item_normalization, ensure_ascii=False, indent=2)}
     
+    {spec_master_section}
+    
     【重要ルール】
     1. 店舗名の後に「:」または改行がある場合、その後の行は全てその店舗の注文です
     2. 品目名がない行（例：「50×1」）は、直前の品目の続きとして処理してください
@@ -97,7 +131,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     4. 「胡瓜バラ」と「胡瓜3本」は別の規格として扱ってください
     5. unit, boxes, remainderには「数字のみ」を入れてください
     
-    【計算ルール（事前登録マスターデータ＝1コンテナあたりの入数）】
+    【計算ルール（上記マスタ＝1コンテナあたりの入数）】
     {unit_lines}
     
     【最重要：総数 vs 箱数】
@@ -107,7 +141,6 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     【出力JSON形式】
     [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"boxes":数字,"remainder":数字}}]
     
-    【メール本文】
     （画像からの解析ですが、形式は同じJSONです）
     
     必ず全ての店舗と品目を漏れなく読み取ってください。
@@ -149,8 +182,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
     known_stores = get_known_stores()
     item_normalization = get_item_normalization()
     store_list = "、".join(known_stores)
-    item_settings_for_prompt = load_item_settings()
-    unit_lines = "\n".join([f"- {name}: {s.get('default_unit', 0)}{s.get('unit_type', '袋')}/コンテナ" for name, s in sorted(item_settings_for_prompt.items()) if s.get("default_unit", 0) > 0])
+    unit_lines, box_count_str, spec_master_section = _build_spec_master_prompt_sections()
     
     prompt = f"""
     メール本文から注文情報を抽出し、JSON形式で返してください。
@@ -165,8 +197,12 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
     【品目名の正規化ルール】
     {json.dumps(item_normalization, ensure_ascii=False, indent=2)}
     
+    {spec_master_section}
+    
     【計算ルール（1コンテナあたりの入数）】
     {unit_lines}
+    
+    【箱数で受信する品目】{box_count_str} → 「×数字」は箱数として boxes に入れてください。
     
     【重要ルール】
     - 出力は純粋なJSONのみ (Markdown記法なし)。
