@@ -347,11 +347,14 @@ def validate_and_fix_order_data(order_data, auto_learn=True):
                 if default_unit > 0:
                     unit = default_unit
         effective_unit = get_effective_unit_size(normalized_item or item, spec_for_lookup)
+        item_setting_for_boxes = get_item_setting(normalized_item or item, spec_for_lookup)
+        receive_as_boxes = bool(item_setting_for_boxes.get("receive_as_boxes", False))
         if effective_unit > 0 and unit > 0 and unit < effective_unit and boxes == 0 and remainder == 0:
             boxes = unit
             unit = effective_unit
             remainder = 0
-        elif effective_unit > 0 and unit == effective_unit and boxes == 0 and 0 < remainder < effective_unit:
+        elif receive_as_boxes and effective_unit > 0 and unit == effective_unit and boxes == 0 and 0 < remainder < effective_unit:
+            # 平箱のみ: 「100×10」で10が箱数の場合の補正。春菊など個数品目では remainder は端数なので変換しない
             boxes = remainder
             remainder = 0
         if unit == 0 and boxes == 0 and remainder == 0:
