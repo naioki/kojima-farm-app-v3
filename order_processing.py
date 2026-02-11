@@ -35,6 +35,32 @@ def get_item_normalization():
     return load_items()
 
 
+def _fix_boxes_remainder_when_count_misread_as_boxes(entries: list) -> None:
+    """
+    平箱以外の品目で、AIが個数（総数）を箱数に入れてしまった場合に補正する。
+    例：春菊×20 → 正しくは boxes=0, remainder=20。AIが boxes=20, remainder=0 と出したら直す。
+    条件: receive_as_boxes でない かつ remainder=0 かつ 0 < boxes <= unit → boxes を総数と解釈し直す。
+    """
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        item = (entry.get("item") or "").strip()
+        spec = (entry.get("spec") or "").strip()
+        unit = safe_int(entry.get("unit", 0))
+        boxes = safe_int(entry.get("boxes", 0))
+        remainder = safe_int(entry.get("remainder", 0))
+        if unit <= 0 or remainder != 0 or boxes <= 0:
+            continue
+        normalized_item = normalize_item_name(item, auto_learn=False)
+        setting = get_item_setting(normalized_item or item, spec)
+        if setting.get("receive_as_boxes", False):
+            continue
+        if boxes <= unit:
+            total = boxes
+            entry["boxes"] = total // unit
+            entry["remainder"] = total % unit
+
+
 def normalize_spec_from_parse(spec_str: str) -> str:
     """
     メール・画像解析で得た規格を、品目名管理マスタに合わせて正規化する。
@@ -190,6 +216,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
                 entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
+        _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result
     except json.JSONDecodeError as e:
         st.error(format_error_display(e, "JSON解析"))
@@ -269,6 +296,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
                 entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
+        _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result
     except Exception as e:
         st.error(format_error_display(e, "テキスト解析"))
