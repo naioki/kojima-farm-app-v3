@@ -367,8 +367,88 @@ def update_ledger_row_by_id(
     return True, "1行を更新しました。"
 
 
+def update_ledger_rows_unit_price_bulk(
+    spreadsheet_id: str,
+    sheet_name: str,
+    updates_list: List[Dict[str, Any]],
+    credentials=None,
+    st_secrets=None,
+) -> Tuple[bool, str, int]:
+    """
+    複数行の納品単価・納品金額を一括更新する（確定状態は確定フラグで管理するためステータス列は更新しない）。
+    updates_list: [{"納品ID": str, "納品単価": num, "納品金額": num}, ...]
+    シートを1回だけ読み、update_cells で一括書き込みするため高速。
+    Returns: (成功可否, メッセージ, 更新件数)
+    """
+    if not updates_list or not isinstance(updates_list, list):
+        return True, "対象がありません。", 0
+    ids_set = set()
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for u in updates_list:
+        did = (u.get("納品ID") or "").strip()
+        if not did:
+            continue
+        ids_set.add(did)
+        by_id[did] = u
+    if not ids_set:
+        return True, "対象がありません。", 0
+    creds = credentials or _get_credentials(st_secrets)
+    if creds is None:
+        return False, "Google スプレッドシート用の認証が設定されていません。", 0
+    try:
+        import gspread
+        try:
+            from gspread.cell import Cell
+        except ImportError:
+            from gspread.models import Cell
+    except ImportError:
+        return False, "gspread がインストールされていません。", 0
+    sid = (spreadsheet_id or "").strip()
+    if not sid or not _validate_spreadsheet_id(sid):
+        return False, "スプレッドシートIDが不正です。", 0
+    sheet_name_s = (sheet_name or "台帳データ").strip() or "台帳データ"
+    try:
+        client = gspread.authorize(creds)
+        workbook = client.open_by_key(sid)
+        sheet = workbook.worksheet(sheet_name_s)
+        all_values = sheet.get_all_values()
+    except Exception as e:
+        return False, f"スプレッドシートの取得に失敗しました: {str(e)}", 0
+    if not all_values or len(all_values) < 2:
+        return False, "データがありません。", 0
+    header = [str(h).strip() for h in all_values[0]]
+    col_name_to_idx = {h: i for i, h in enumerate(header)}
+    id_col = "納品ID"
+    if id_col not in col_name_to_idx:
+        return False, "台帳に「納品ID」列がありません。", 0
+    id_idx = col_name_to_idx[id_col]
+    id_to_row: Dict[str, int] = {}
+    for r in range(1, len(all_values)):
+        row = all_values[r]
+        if id_idx < len(row) and str(row[id_idx]).strip() in ids_set:
+            id_to_row[str(row[id_idx]).strip()] = r + 1
+    cells: List[Cell] = []
+    for col_key in ("納品単価", "納品金額"):
+        if col_key not in col_name_to_idx:
+            continue
+        col_1 = col_name_to_idx[col_key] + 1
+        for did, u in by_id.items():
+            row_1 = id_to_row.get(did)
+            if not row_1:
+                continue
+            val = u.get(col_key)
+            cells.append(Cell(row=row_1, col=col_1, value=_normalize_cell_value(val)))
+    if not cells:
+        return False, "更新する列（納品単価・納品金額）が見つかりません。", 0
+    try:
+        sheet.update_cells(cells)
+    except Exception as e:
+        return False, f"一括更新に失敗しました: {str(e)}", 0
+    return True, f"{len(id_to_row)}件を更新しました。", len(id_to_row)
+
+
 # 事務用で単価・金額を扱うために台帳に必要な列名
-_LEDGER_PRICE_COLUMNS = ["納品単価", "納品金額", "ステータス"]
+_LEDGER_PRICE_COLUMNS = ["納品単価", "納品金額"]
 
 
 def ensure_ledger_price_columns(
@@ -378,7 +458,7 @@ def ensure_ledger_price_columns(
     st_secrets=None,
 ) -> Tuple[bool, str]:
     """
-    台帳シートに「納品単価」「納品金額」「ステータス」列がなければ、末尾に追加する。
+    台帳シートに「納品単価」「納品金額」列がなければ、末尾に追加する。
     すでにある場合は何もしない。
     Returns: (成功可否, メッセージ)
     """
@@ -405,7 +485,7 @@ def ensure_ledger_price_columns(
     header = [str(h).strip() for h in all_values[0]]
     missing = [c for c in _LEDGER_PRICE_COLUMNS if c not in header]
     if not missing:
-        return True, "すでに「納品単価」「納品金額」「ステータス」列があります。"
+        return True, "すでに「納品単価」「納品金額」列があります。"
     try:
         sheet.add_cols(len(missing))
         for i, col_name in enumerate(missing):

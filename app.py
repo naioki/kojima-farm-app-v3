@@ -29,7 +29,7 @@ from config_manager import (
 from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
 from delivery_converter import v2_result_to_delivery_rows, v2_result_to_ledger_rows, ledger_rows_to_v2_format_with_units
-from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, set_ledger_rows_confirmed, is_sheet_configured
+from delivery_sheet_writer import append_delivery_rows, append_ledger_rows, fetch_ledger_rows, update_ledger_row_by_id, update_ledger_rows_unit_price_bulk, set_ledger_rows_confirmed, is_sheet_configured
 from error_display_util import format_error_display
 try:
     from delivery_sheet_writer import fetch_ledger_confirmed_dates
@@ -360,10 +360,12 @@ if nav_role == NAV_OFFICE:
         df_office = pd.DataFrame(filtered)
         if "選択" not in df_office.columns:
             df_office["選択"] = False
-        # 一括選択ボタンが押された場合は全行を選択状態にする
+        # 一括選択ボタンが押された場合は全行を選択状態にする（data_editorのキャッシュを消して反映させる）
         if st.session_state.get("office_select_all"):
             df_office["選択"] = True
             del st.session_state["office_select_all"]
+            if "office_data_editor" in st.session_state:
+                del st.session_state["office_data_editor"]
 
         sheet_display = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
         sid_display = (ledger_id_office or "").strip()
@@ -406,27 +408,23 @@ if nav_role == NAV_OFFICE:
                 else:
                     sid = (ledger_id_office or "").strip()
                     sheet_s = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
-                    ok_count = 0
-                    errs = []
+                    updates_list = []
                     for did, row in selected_ids:
                         try:
                             qty = int(float(str(row.get("数量", 0)).replace(",", ""))) if row.get("数量") is not None else 0
                         except (ValueError, TypeError):
                             qty = 0
                         amount = apply_price * qty
-                        ok, msg = update_ledger_row_by_id(sid, sheet_s, did, {"納品単価": apply_price, "納品金額": amount, "ステータス": "確定"}, st_secrets=secrets_obj_office)
-                        if ok:
-                            ok_count += 1
-                        else:
-                            errs.append(f"{did}: {msg}")
-                    if ok_count > 0:
+                        updates_list.append({"納品ID": did, "納品単価": apply_price, "納品金額": amount})
+                    ok, msg, ok_count = update_ledger_rows_unit_price_bulk(sid, sheet_s, updates_list, st_secrets=secrets_obj_office)
+                    if ok and ok_count > 0:
                         st.success(f"✅ {ok_count}件を更新しました。（納品金額＝単価×数量で再計算）")
                         ok2, _, new_rows = fetch_ledger_rows(sid, sheet_name=sheet_s, only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
                         if ok2:
                             st.session_state.office_zero_unit_rows = new_rows
                         st.rerun()
-                    if errs:
-                        st.error("\n".join(errs[:10]))
+                    elif not ok:
+                        st.error(msg)
     st.stop()
 
 # 現場用：出荷業務
@@ -1053,6 +1051,7 @@ if st.session_state.parsed_data:
     st.markdown("---")
     st.header("📊 解析結果の確認・編集")
     st.write("以下のテーブルでデータを確認・編集できます。規格を変更すると入数・合計数量が再計算されます。編集後は「ラベルを生成」ボタンを押してください。")
+    st.caption("品目・規格は一覧から選択できます（マスタ＋表の既存値）。入数は数値で直接入力できます。新しい品目は「設定管理」の品目名管理で追加してください。")
     df_data = []
     for entry in st.session_state.parsed_data:
         item_name = entry.get('item', '')
@@ -1092,8 +1091,30 @@ if st.session_state.parsed_data:
         total_quantity = (unit * boxes) + remainder
         df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': spec_s, '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
+    # 品目・規格は選択＋既存値のハイブリッド用に選択肢を組み立て（マスタ＋現在の表の値）
+    _items_dict = load_items()
+    _item_names = set(_items_dict.keys()) | {v for variants in _items_dict.values() for v in (variants or [])}
+    _spec_master = load_item_spec_master()
+    _item_names |= {(r.get("品目") or "").strip() for r in _spec_master if (r.get("品目") or "").strip()}
+    _spec_names = {(r.get("規格") or "").strip() for r in _spec_master}
+    if not df.empty:
+        _item_names |= set(df["品目"].dropna().astype(str).str.strip())
+        _spec_names |= set(df["規格"].dropna().astype(str).str.strip())
+    item_options = sorted(x for x in _item_names if x)
+    spec_options = [""] + sorted(x for x in _spec_names if x)
+    # 品目: 選択肢があればSelectbox（マスタ＋表の既存値）、なければ手入力のTextColumn
+    col_品目 = st.column_config.SelectboxColumn("品目", options=item_options, required=True) if item_options else st.column_config.TextColumn("品目", required=True)
+    col_規格 = st.column_config.SelectboxColumn("規格", options=spec_options) if spec_options else st.column_config.TextColumn("規格")
     edited_df = st.data_editor(df, width="stretch", num_rows="dynamic",
-        column_config={'店舗名': st.column_config.SelectboxColumn('店舗名', options=load_stores(), required=True), '品目': st.column_config.TextColumn('品目', required=True), '規格': st.column_config.TextColumn('規格'), '入数(unit)': st.column_config.NumberColumn('入数(unit)', min_value=0, step=1), '箱数(boxes)': st.column_config.NumberColumn('箱数(boxes)', min_value=0, step=1), '端数(remainder)': st.column_config.NumberColumn('端数(remainder)', min_value=0, step=1), '合計数量': st.column_config.NumberColumn('合計数量', disabled=True)})
+        column_config={
+            "店舗名": st.column_config.SelectboxColumn("店舗名", options=load_stores(), required=True),
+            "品目": col_品目,
+            "規格": col_規格,
+            "入数(unit)": st.column_config.NumberColumn("入数(unit)", min_value=0, step=1),
+            "箱数(boxes)": st.column_config.NumberColumn("箱数(boxes)", min_value=0, step=1),
+            "端数(remainder)": st.column_config.NumberColumn("端数(remainder)", min_value=0, step=1),
+            "合計数量": st.column_config.NumberColumn("合計数量", disabled=True),
+        })
     # 規格変更時: 入数をマスタ／規格名から再設定し、合計数量を再計算（num_rows=dynamic で追加行がある場合は idx>=len(df) で orig_row は None）
     for idx, row in edited_df.iterrows():
         spec_val = row.get('規格')
