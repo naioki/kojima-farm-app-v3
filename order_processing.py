@@ -35,6 +35,32 @@ def get_item_normalization():
     return load_items()
 
 
+def _compute_boxes_remainder_from_total(entries: list) -> None:
+    """
+    AIが返した合計数量(total)から、Pythonで箱数・端数を計算して entry に設定する。
+    箱数 = 合計数量 ÷ 入数 の商、端数 = 余り。入数が0の場合はマスタから補う。
+    """
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        total = safe_int(entry.get("total", 0))
+        if "total" not in entry:
+            continue
+        unit = safe_int(entry.get("unit", 0))
+        item = (entry.get("item") or "").strip()
+        spec = (entry.get("spec") or "").strip()
+        if unit <= 0 and (item or spec is not None):
+            normalized = normalize_item_name(item, auto_learn=False)
+            setting = get_item_setting(normalized or item, spec)
+            unit = int(setting.get("default_unit", 0)) or 0
+        if unit <= 0:
+            entry["boxes"] = 0
+            entry["remainder"] = total
+        else:
+            entry["boxes"] = total // unit
+            entry["remainder"] = total % unit
+
+
 def _fix_boxes_remainder_when_count_misread_as_boxes(entries: list) -> None:
     """
     平箱以外の品目で、AIが個数（総数）を箱数に入れてしまった場合に補正する。
@@ -180,17 +206,17 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     2. 品目名がない行（例：「50×1」）は、直前の品目の続きとして処理してください
     3. 「/」で区切られた複数の注文は、同じ店舗・同じ品目として統合してください
     4. 「胡瓜バラ」と「胡瓜3本」は別の規格として扱ってください
-    5. unit, boxes, remainderには「数字のみ」を入れてください
+    5. unit と total には「数字のみ」を入れてください。箱数・端数は出力不要です（Python側で計算します）。
     
     【計算ルール（上記マスタ＝1コンテナあたりの入数）】
     {unit_lines}
     
-    【最重要：総数 vs 箱数】
-    - 「×数字」が総数の品目：boxes = 総数÷unit（切り捨て）, remainder = 総数 - unit×boxes で逆算してください。
-    - 「×数字」が箱数の品目（以下のみ）：{box_count_str} → ×数字をそのままboxesにし、unitは上記の値、remainder=0 で出力してください。
+    【合計数量(total)の取り方】
+    - 合計数量：メール内の「×」の後の数字を合計数量(total)とします。※「胡瓜バラ 50×4」のように「数×数」の表記の場合は、50×4＝200 として total に入れてください。
+    - 箱数で受信する品目（{box_count_str}）のみ：「×」の後の数字を箱数とし、合計数量＝箱数×入数 として total に入れてください（例：4箱・入数30 → total=120）。
     
     【出力JSON形式】
-    [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"boxes":数字,"remainder":数字}}]
+    [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"total":数字}}]
     
     （画像からの解析ですが、形式は同じJSONです）
     
@@ -215,7 +241,9 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
                 entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
-        _fix_boxes_remainder_when_count_misread_as_boxes(result)
+        _compute_boxes_remainder_from_total(result)
+        if any(isinstance(e, dict) and "total" not in e for e in result):
+            _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result
     except json.JSONDecodeError as e:
         st.error(format_error_display(e, "JSON解析"))
@@ -259,16 +287,17 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
     【計算ルール（1コンテナあたりの入数）】
     {unit_lines}
     
-    【箱数で受信する品目】{box_count_str} → 「×数字」は箱数として boxes に入れてください。
+    【合計数量(total)の取り方】
+    - 合計数量：メール内の「×」の後の数字を合計数量(total)とします。※「胡瓜バラ 50×4」のように「数×数」の表記の場合は、50×4＝200 として total に入れてください。
+    - 箱数で受信する品目（{box_count_str}）のみ：「×」の後の数字を箱数とし、合計数量＝箱数×入数 として total に入れてください（例：4箱・入数30 → total=120）。箱数・端数は出力不要です（Python側で計算します）。
     
     【重要ルール】
-    - 「×数字」が総数の場合は boxes/remainder に分解し、箱数の場合は boxes に入れてください（文脈から判断）。
     - 出力は純粋なJSONのみ (Markdown記法なし)。
-    - unit, boxes, remainderには「数字のみ」を入れてください。
+    - unit と total には「数字のみ」を入れてください。
     - 日付情報が含まれている場合でも、今回の出力には含めず、注文明細のみ抽出してください。
     
     【出力JSON形式】
-    [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"boxes":数字,"remainder":数字}}]
+    [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"total":数字}}]
     
     【メール本文】
     {text}
@@ -293,7 +322,9 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
                 entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
-        _fix_boxes_remainder_when_count_misread_as_boxes(result)
+        _compute_boxes_remainder_from_total(result)
+        if any(isinstance(e, dict) and "total" not in e for e in result):
+            _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result
     except Exception as e:
         st.error(format_error_display(e, "テキスト解析"))
