@@ -185,10 +185,9 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     【計算ルール（上記マスタ＝1コンテナあたりの入数）】
     {unit_lines}
     
-    【最重要：個数（総数）と箱数の解釈】
-    - 基本：品目名に続く数字（例：春菊20、春菊の二十、胡瓜30）は**個数（総数）**です。この数字を箱数(boxes)に入れてはいけません。総数÷unitの商がboxes、余りが端数(remainder)です。例：春菊20・unit30 → boxes=0, remainder=20（20は端数に入る）。
-    - 平箱以外はすべて個数として解釈し、boxes = 総数÷unit（切り捨て）, remainder = 総数 - unit×boxes で計算してください。
-    - 例外（箱数のみ）：規格が**平箱**の品目（{box_count_str}）のみ、「×数字」が箱数を表す場合があります。そのときは ×数字 をそのまま boxes にし、remainder=0 で出力してください。
+    【最重要：総数 vs 箱数】
+    - 「×数字」が総数の品目：boxes = 総数÷unit（切り捨て）, remainder = 総数 - unit×boxes で逆算してください。
+    - 「×数字」が箱数の品目（以下のみ）：{box_count_str} → ×数字をそのままboxesにし、unitは上記の値、remainder=0 で出力してください。
     
     【出力JSON形式】
     [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"boxes":数字,"remainder":数字}}]
@@ -260,12 +259,10 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
     【計算ルール（1コンテナあたりの入数）】
     {unit_lines}
     
-    【最重要：個数（総数）と箱数の解釈】
-    - 基本：メールの数字（例：春菊20、春菊の二十、胡瓜30）は**個数（総数）**です。この数字を箱数(boxes)に入れてはいけません。総数÷unitの商がboxes、余りが端数(remainder)です。例：春菊20・unit30 → boxes=0, remainder=20（20は端数に入る）。
-    - 平箱以外はすべて個数として解釈し、boxes = 総数÷unit（切り捨て）, remainder = 総数 - unit×boxes で計算してください。
-    - 例外：規格が**平箱**の品目（{box_count_str}）のみ、「×数字」を箱数として boxes に入れ、remainder=0 にしてください。
+    【箱数で受信する品目】{box_count_str} → 「×数字」は箱数として boxes に入れてください。
     
     【重要ルール】
+    - 「×数字」が総数の場合は boxes/remainder に分解し、箱数の場合は boxes に入れてください（文脈から判断）。
     - 出力は純粋なJSONのみ (Markdown記法なし)。
     - unit, boxes, remainderには「数字のみ」を入れてください。
     - 日付情報が含まれている場合でも、今回の出力には含めず、注文明細のみ抽出してください。
