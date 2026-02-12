@@ -38,7 +38,7 @@ def get_item_normalization():
 def _compute_boxes_remainder_from_total(entries: list) -> None:
     """
     AIが返した合計数量(total)から、Pythonで箱数・端数を計算して entry に設定する。
-    箱数 = 合計数量 ÷ 入数 の商、端数 = 余り。入数が0の場合はマスタから補う。
+    箱数 = 合計数量 ÷ 入数 の商、端数 = 余り。入数は入り数マスタ（品目名管理）を常に優先する。
     """
     for entry in entries:
         if not isinstance(entry, dict):
@@ -46,17 +46,18 @@ def _compute_boxes_remainder_from_total(entries: list) -> None:
         total = safe_int(entry.get("total", 0))
         if "total" not in entry:
             continue
-        unit = safe_int(entry.get("unit", 0))
         item = (entry.get("item") or "").strip()
         spec = (entry.get("spec") or "").strip()
-        if unit <= 0 and (item or spec is not None):
-            normalized = normalize_item_name(item, auto_learn=False)
-            setting = get_item_setting(normalized or item, spec)
-            unit = int(setting.get("default_unit", 0)) or 0
+        normalized = normalize_item_name(item, auto_learn=False)
+        setting = get_item_setting(normalized or item, spec)
+        unit = int(setting.get("default_unit", 0)) or 0
+        if unit <= 0:
+            unit = safe_int(entry.get("unit", 0))
         if unit <= 0:
             entry["boxes"] = 0
             entry["remainder"] = total
         else:
+            entry["unit"] = unit
             entry["boxes"] = total // unit
             entry["remainder"] = total % unit
 

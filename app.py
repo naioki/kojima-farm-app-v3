@@ -1108,6 +1108,9 @@ if st.session_state.parsed_data:
             entry['remainder'] = 0
         if unit == 0 and effective_unit > 0:
             unit = effective_unit
+        # 表示用の入数は入り数マスタ（品目名管理）を常に優先する（AIの誤った入数で表示しない）
+        if effective_unit > 0:
+            unit = effective_unit
         total_quantity = (unit * boxes) + remainder
         df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': spec_s, '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
