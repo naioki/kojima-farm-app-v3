@@ -258,15 +258,21 @@ class LabelPDFGenerator:
         table_data.append(header_row)
         
         # データ行（品目列は品目+荷姿の表示名を使用＝マスターで管理した判別しやすい名称）
+        total_full_boxes = 0
+        total_rem_boxes = 0
         for entry in summary_data:
             store = str(entry.get('store', ''))
             item_display = str(entry.get('item_display', entry.get('item', '')))
-            boxes = str(entry.get('boxes', 0))
-            rem_box = str(entry.get('rem_box', 0))
+            boxes = int(entry.get('boxes', 0)) if entry.get('boxes') is not None else 0
+            rem_box = int(entry.get('rem_box', 0)) if entry.get('rem_box') is not None else 0
+            total_full_boxes += boxes
+            total_rem_boxes += rem_box
             total_quantity = entry.get('total_quantity', 0)
             unit_label = entry.get('unit_label', '')
             total_display = f"{total_quantity}{unit_label}" if total_quantity > 0 and unit_label else str(total_quantity)
-            table_data.append([store, item_display, boxes, rem_box, total_display])
+            table_data.append([store, item_display, str(boxes), str(rem_box), total_display])
+        # 一番下の欄：フル箱の総数・端数箱の総数
+        table_data.append(["", "合計", str(total_full_boxes), str(total_rem_boxes), ""])
         
         # テーブルの列幅を設定（mm単位）- A4幅（210mm）に収まるように調整
         # 左右マージン10mmずつ = 20mm、テーブル幅は190mm以内に収める
@@ -304,6 +310,12 @@ class LabelPDFGenerator:
             ('TOPPADDING', (0, 1), (-1, -1), 6),
             ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
         ])
+        # 一番下の合計行のスタイル（フル箱・端数箱の総数）
+        total_row_idx = len(table_data) - 1
+        table_style.add('BACKGROUND', (0, total_row_idx), (-1, total_row_idx), HexColor('#D8D8D8'))
+        table_style.add('ALIGN', (2, total_row_idx), (3, total_row_idx), 'CENTER')
+        table_style.add('FONTNAME', (0, total_row_idx), (-1, total_row_idx), font_name)
+        table_style.add('FONTSIZE', (0, total_row_idx), (-1, total_row_idx), data_font_size)
         
         table.setStyle(table_style)
         
