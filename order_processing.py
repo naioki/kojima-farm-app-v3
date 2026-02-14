@@ -1,6 +1,10 @@
 """
 注文データ処理モジュール
 画像/テキスト解析、データ検証、正規化ロジックを担当
+
+【致命的ルール】注文の「×」の直後の数字は合計数量（総数）。箱数ではない。
+  例: 胡瓜3本×150 → total=150（誤り: total=4500）。春菊×20 → total=20（誤り: total=600）。
+  詳細: docs/計算ロジックと品質保証.md の「致命的に守るべきルール」
 """
 import json
 import re
@@ -88,6 +92,33 @@ def _fix_boxes_remainder_when_count_misread_as_boxes(entries: list) -> None:
         if boxes <= unit:
             total = boxes
             entry["boxes"], entry["remainder"] = total_to_boxes_remainder(total, unit)
+
+
+def _fix_total_when_ai_sent_boxes_times_unit(entries: list) -> None:
+    """
+    AIが「×」の後の数字を箱数と誤解し、total=箱数×入数 で返した場合に補正する。
+    例：胡瓜3本×150 → 正しくは total=150, 箱数=5, 端数=0。AIが total=4500(150*30) と返したら total=150 に直す。
+    条件: receive_as_boxes でない かつ total == unit * boxes かつ boxes が 10 以上（×の後が箱数と誤解されやすい値）
+    """
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        total = safe_int(entry.get("total", 0))
+        unit = safe_int(entry.get("unit", 0))
+        boxes = safe_int(entry.get("boxes", 0))
+        remainder = safe_int(entry.get("remainder", 0))
+        if unit <= 0 or total <= 0 or remainder != 0:
+            continue
+        item = (entry.get("item") or "").strip()
+        spec = (entry.get("spec") or "").strip()
+        normalized_item = normalize_item_name(item, auto_learn=False)
+        setting = get_item_setting(normalized_item or item, spec)
+        if setting.get("receive_as_boxes", False):
+            continue
+        # total が 箱数×入数 になっている（＝×の後を箱数と誤解した）可能性: total == unit * boxes かつ boxes が「×の後」としてあり得る範囲
+        if total == unit * boxes and boxes >= 10 and boxes <= 1000:
+            entry["total"] = boxes
+            entry["boxes"], entry["remainder"] = total_to_boxes_remainder(boxes, unit)
 
 
 def normalize_spec_from_parse(spec_str: str) -> str:
@@ -214,6 +245,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     store_list = "、".join(known_stores)
     unit_lines, box_count_str, spec_master_section = _build_spec_master_prompt_sections()
     # トークン削減: 冗長表現を削り、ルール・品質は維持
+    # 【致命】「×」の後＝合計数量。プロンプトに「×の後＝箱数」や total=個数×入数 の誤った例を書かないこと。
     norm_json = json.dumps(item_normalization, ensure_ascii=False)
     prompt = f"""画像を解析し、厳密に以下のルールでJSONのみ返す。
 
@@ -223,7 +255,13 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 {spec_master_section}
 【ルール】1) 店舗名の「:」以降はその店舗の注文 2) 品目なし行は直前の品目の続き 3) 「/」区切りは同店舗・同品目で統合 4) 胡瓜バラと胡瓜3本は別規格 5) unit/totalは数字のみ（箱数・端数は出力しない）
 【入数】{unit_lines}
-【total】「×」の後を合計に。50×4→200。箱数で受信の品目（{box_count_str}）は「×」後を箱数とし total=箱数×入数（例：胡瓜平箱×1→1箱、total=50）。春菊・青梗菜は規格が1つのため省略される。「春菊×20」→spec=1束・unit=30・total=20×30=600。「青梗菜×15」→spec=2~3株・unit=20・total=15×20=300。
+【total・重要】「×」の直後の数字はその品目の「合計数量（総数）」です。箱数ではない。その数字をそのまま total に入れる。
+・胡瓜3本×150 → total=150（150は総数。150箱ではない）
+・春菊×20 → total=20
+・青梗菜×15 → total=15
+・ネギ2本×120 → total=120
+例外1) 箱数で受信の品目（{box_count_str}）のみ：「×」後を箱数とし total=箱数×入数。例：胡瓜平箱×1→total=50。
+例外2) 「胡瓜バラ 50×4」のように「数×数」の掛け算表記のときは 50×4=200 を total に。
 【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]
 全店舗・全品目を漏れなく。長ネギ2本は入数30で計算すること。"""
     try:
@@ -246,6 +284,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
         _compute_boxes_remainder_from_total(result)
+        _fix_total_when_ai_sent_boxes_times_unit(result)
         if any(isinstance(e, dict) and "total" not in e for e in result):
             _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result
@@ -275,13 +314,17 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
     item_normalization = get_item_normalization()
     store_list = "、".join(known_stores)
     unit_lines, box_count_str, spec_master_section = _build_spec_master_prompt_sections()
+    # 【致命】「×」の後＝合計数量。total=個数×入数 の誤った例をプロンプトに書かないこと。
     norm_json = json.dumps(item_normalization, ensure_ascii=False)
     prompt = f"""メール本文から注文のみ抽出し、JSONのみ返す。送信者:{sender} 件名:{subject}
 【店舗】{store_list}（文脈から判断可）
 【品目正規化】{norm_json}
 {spec_master_section}
 【入数】{unit_lines}
-【total】「×」の後を合計。50×4→200。箱数で受信（{box_count_str}）は「×」後を箱数とし total=箱数×入数（胡瓜平箱×1→total=50）。春菊・青梗菜は規格省略可。「春菊×20」→spec=1束,unit=30,total=600。「青梗菜×15」→spec=2~3株,unit=20,total=300。長ネギ2本はunit=30。日付は出力しない。
+【total・重要】「×」の直後の数字はその品目の「合計数量（総数）」です。箱数ではない。その数字をそのまま total に入れる。
+・胡瓜3本×150→total=150 ・春菊×20→total=20 ・青梗菜×15→total=15 ・ネギ2本×120→total=120
+例外1) 箱数で受信（{box_count_str}）のみ：「×」後を箱数とし total=箱数×入数。例：胡瓜平箱×1→total=50。
+例外2) 「50×4」の掛け算表記のときは 50×4=200 を total に。春菊・青梗菜は規格省略可。長ネギ2本はunit=30。日付は出力しない。
 【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]（Markdownなし）
 【本文】
 {text}"""
@@ -306,6 +349,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
         _compute_boxes_remainder_from_total(result)
+        _fix_total_when_ai_sent_boxes_times_unit(result)
         if any(isinstance(e, dict) and "total" not in e for e in result):
             _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result

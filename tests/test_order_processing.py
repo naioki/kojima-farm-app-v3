@@ -1,6 +1,13 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from order_processing import safe_int, validate_and_fix_order_data, validate_store_name, normalize_item_name
+from order_processing import (
+    safe_int,
+    validate_and_fix_order_data,
+    validate_store_name,
+    normalize_item_name,
+    _compute_boxes_remainder_from_total,
+    _fix_total_when_ai_sent_boxes_times_unit,
+)
 
 def test_safe_int():
     assert safe_int(10) == 10
@@ -75,4 +82,45 @@ def test_validate_and_fix_order_data(mock_success, mock_write, mock_warning, moc
     assert entry["unit"] == 10 # Should be filled from looked_up
     assert entry["boxes"] == 2
     assert entry["remainder"] == 5
+
+
+@patch('order_processing.normalize_item_name')
+@patch('order_processing.get_item_setting')
+def test_compute_boxes_remainder_from_total_kyuri(mock_get_setting, mock_norm):
+    """胡瓜3本×150: total=150 → 箱数=5, 端数=0（入数30）"""
+    mock_norm.return_value = "胡瓜"
+    mock_get_setting.return_value = {"default_unit": 30}
+    entries = [{"store": "鎌ケ谷", "item": "胡瓜", "spec": "3本", "total": 150}]
+    _compute_boxes_remainder_from_total(entries)
+    assert entries[0]["unit"] == 30
+    assert entries[0]["boxes"] == 5
+    assert entries[0]["remainder"] == 0
+
+
+@patch('order_processing.normalize_item_name')
+@patch('order_processing.get_item_setting')
+def test_compute_boxes_remainder_from_total_shungiku(mock_get_setting, mock_norm):
+    """春菊×20: total=20 → 箱数=0, 端数=20（入数30）"""
+    mock_norm.return_value = "春菊"
+    mock_get_setting.return_value = {"default_unit": 30}
+    entries = [{"store": "鎌ケ谷", "item": "春菊", "spec": "1束", "total": 20}]
+    _compute_boxes_remainder_from_total(entries)
+    assert entries[0]["unit"] == 30
+    assert entries[0]["boxes"] == 0
+    assert entries[0]["remainder"] == 20
+
+
+@patch('order_processing.normalize_item_name')
+@patch('order_processing.get_item_setting')
+def test_fix_total_when_ai_sent_boxes_times_unit(mock_get_setting, mock_norm):
+    """AIが胡瓜3本×150を total=4500(150*30) で返した場合 → total=150, 箱数=5, 端数=0 に補正"""
+    mock_norm.return_value = "胡瓜"
+    mock_get_setting.return_value = {"default_unit": 30, "receive_as_boxes": False}
+    entries = [
+        {"store": "鎌ケ谷", "item": "胡瓜", "spec": "3本", "unit": 30, "total": 4500, "boxes": 150, "remainder": 0}
+    ]
+    _fix_total_when_ai_sent_boxes_times_unit(entries)
+    assert entries[0]["total"] == 150
+    assert entries[0]["boxes"] == 5
+    assert entries[0]["remainder"] == 0
 

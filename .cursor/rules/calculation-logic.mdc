@@ -1,5 +1,5 @@
 ---
-description: 箱数・端数・合計数量の計算は box_remainder_calc を使い、直書きの割り算を禁止する
+description: 箱数・端数・合計数量の計算は box_remainder_calc を使い、直書きの割り算を禁止する。注文の「×の後＝合計数量」は致命的ルール。
 globs: ["**/order_processing.py", "**/delivery_converter.py", "**/app.py", "**/box_remainder_calc.py"]
 alwaysApply: false
 ---
@@ -7,6 +7,8 @@ alwaysApply: false
 # 計算ロジック（箱数・端数・合計数量）のルール
 
 **箱数(boxes)・端数(remainder)・合計数量(total)・入数(unit)** の計算を変更・追加するときは、以下を守ること。
+
+**⚠️ 致命ルール**: 注文の「×」の直後の数字は**合計数量**。箱数と解釈したり「×の後×入数」を total にしない。例：胡瓜3本×150→total=150（誤り：total=4500）。詳細は `docs/計算ロジックと品質保証.md`。
 
 1. **唯一の実装**: 割り算（箱数＝総数÷入数の商、端数＝余り）は **`box_remainder_calc` モジュール** にのみ実装する。
    - `total_to_boxes_remainder(total, unit)` → (boxes, remainder)
