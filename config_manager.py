@@ -209,8 +209,8 @@ def initialize_default_units():
     units = load_units()
     updated = False
     default_unit_map = {
-        ("胡瓜", ""): 30, ("胡瓜平箱", ""): 30, ("胡瓜バラ", ""): 100,
-        ("長ネギ", ""): 50, ("長ねぎバラ", ""): 50, ("春菊", ""): 30, ("青梗菜", ""): 20,
+        ("胡瓜", ""): 30, ("胡瓜平箱", ""): 50, ("胡瓜バラ", ""): 100,
+        ("長ネギ", ""): 30, ("長ねぎバラ", ""): 50, ("春菊", ""): 30, ("青梗菜", ""): 20,
     }
     stores = load_stores()
     for (item, spec), unit in default_unit_map.items():
@@ -225,9 +225,9 @@ def initialize_default_units():
 
 DEFAULT_ITEM_SETTINGS = {
     "胡瓜": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 30},
-    "胡瓜平箱": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": True, "min_shipping_unit": 30},
+    "胡瓜平箱": {"default_unit": 50, "unit_type": "袋", "receive_as_boxes": True, "min_shipping_unit": 50},
     "胡瓜バラ": {"default_unit": 100, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 30},
-    "長ネギ": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 1},
+    "長ネギ": {"default_unit": 30, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 1},
     "長ねぎバラ": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 1},
     "春菊": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 1},
     "青梗菜": {"default_unit": 20, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 1},
@@ -243,9 +243,11 @@ def load_item_settings() -> Dict[str, Dict[str, Any]]:
                 if isinstance(data, dict):
                     merged = DEFAULT_ITEM_SETTINGS.copy()
                     merged.update(data)
-                    for key in ["長ネギ", "長ねぎバラ", "長ネギバラ"]:
+                    for key in ["長ねぎバラ", "長ネギバラ"]:
                         if key in merged:
                             merged[key] = {**merged[key], "default_unit": 50, "unit_type": "本"}
+                    if "長ネギ" in merged:
+                        merged["長ネギ"] = {**merged["長ネギ"], "default_unit": 30, "unit_type": "本"}
                     for key in list(merged.keys()):
                         merged[key] = {**merged[key], "receive_as_boxes": merged[key].get("receive_as_boxes", DEFAULT_ITEM_SETTINGS.get(key, {}).get("receive_as_boxes", False))}
                     save_item_settings(merged)
@@ -293,10 +295,14 @@ def load_item_spec_master() -> List[Dict[str, Any]]:
 
 
 def save_item_spec_master(rows: List[Dict[str, Any]]) -> None:
-    """品目+規格マスタを保存し、規格が空の行で item_settings を同期する。"""
+    """品目+規格マスタを保存し、規格が空の行で item_settings を同期する。原子書き込みで確実に保存する。"""
     ensure_config_dir()
-    with open(ITEM_SPEC_MASTER_FILE, "w", encoding="utf-8") as f:
+    tmp_path = ITEM_SPEC_MASTER_FILE.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, ITEM_SPEC_MASTER_FILE)
     settings = load_item_settings()
     for row in rows:
         item = (row.get("品目") or "").strip()

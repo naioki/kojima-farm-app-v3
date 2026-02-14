@@ -957,22 +957,31 @@ with tab5:
     item_settings = load_item_settings()
     box_count_items = get_box_count_items()
     spec_master = load_item_spec_master()
-    if spec_master:
-        master_rows = []
-        for r in spec_master:
+    # 編集中データを session_state で保持し、タブ切り替えや再描画でも消えないようにする
+    _draft_key = "item_spec_master_draft"
+    def _spec_to_display_rows(spec_list):
+        rows = []
+        for r in spec_list:
             u = r.get("default_unit", 0)
             t = r.get("unit_type", "袋")
             as_boxes = r.get("receive_as_boxes", False)
             spec = (r.get("規格") or "").strip()
             if not spec:
                 spec = get_default_spec_for_item(r.get("品目", ""))
-            master_rows.append({
+            rows.append({
                 "品目": r.get("品目", ""),
                 "規格": spec,
                 "1コンテナあたりの入数": u,
                 "単位": t,
                 "受信方法": "箱数" if as_boxes else "総数",
             })
+        return rows
+    if spec_master:
+        if _draft_key in st.session_state and st.session_state[_draft_key]:
+            master_rows = st.session_state[_draft_key]
+            st.info("📝 未保存の編集があります。反映するには「マスターデータを保存」を押してください。")
+        else:
+            master_rows = _spec_to_display_rows(spec_master)
         if master_rows:
             df_master = pd.DataFrame(master_rows)
             edited_master = st.data_editor(df_master, width="stretch", hide_index=True,
@@ -983,21 +992,45 @@ with tab5:
                     "単位": st.column_config.SelectboxColumn("単位", options=["袋", "本"], required=True),
                     "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True),
                 })
-            if st.button("💾 マスターデータを保存", key="save_master_btn", type="primary"):
-                key_to_orig = {((r.get("品目") or "").strip(), (r.get("規格") or "").strip()): r for r in spec_master}
-                out_rows = []
-                for _, row in edited_master.iterrows():
-                    name = str(row.get("品目", "")).strip()
-                    spec = str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else ""
-                    u = int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30
-                    t = str(row["単位"]).strip() or "袋"
-                    as_boxes = str(row["受信方法"]).strip() == "箱数"
-                    orig = key_to_orig.get((name, spec)) or key_to_orig.get((name, ""))
-                    min_ship = int(orig.get("min_shipping_unit", 0)) or 0 if orig else 0
-                    out_rows.append({"品目": name, "規格": spec, "default_unit": u, "unit_type": t, "receive_as_boxes": as_boxes, "min_shipping_unit": min_ship})
-                save_item_spec_master(out_rows)
-                st.success("✅ マスターデータを保存しました。")
-                st.rerun()
+            # 編集結果をドラフトとして保持（ファイルと異なる場合のみ。次回表示で消えないようにする）
+            draft_rows = []
+            for _, row in edited_master.iterrows():
+                draft_rows.append({
+                    "品目": str(row.get("品目", "")).strip(),
+                    "規格": str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else "",
+                    "1コンテナあたりの入数": int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30,
+                    "単位": str(row["単位"]).strip() or "袋",
+                    "受信方法": str(row["受信方法"]).strip(),
+                })
+            file_display = _spec_to_display_rows(spec_master)
+            if draft_rows != file_display:
+                st.session_state[_draft_key] = draft_rows
+            elif _draft_key in st.session_state:
+                del st.session_state[_draft_key]
+            col_save, col_reload = st.columns(2)
+            with col_save:
+                if st.button("💾 マスターデータを保存", key="save_master_btn", type="primary"):
+                    key_to_orig = {((r.get("品目") or "").strip(), (r.get("規格") or "").strip()): r for r in spec_master}
+                    out_rows = []
+                    for _, row in edited_master.iterrows():
+                        name = str(row.get("品目", "")).strip()
+                        spec = str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else ""
+                        u = int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30
+                        t = str(row["単位"]).strip() or "袋"
+                        as_boxes = str(row["受信方法"]).strip() == "箱数"
+                        orig = key_to_orig.get((name, spec)) or key_to_orig.get((name, ""))
+                        min_ship = int(orig.get("min_shipping_unit", 0)) or 0 if orig else 0
+                        out_rows.append({"品目": name, "規格": spec, "default_unit": u, "unit_type": t, "receive_as_boxes": as_boxes, "min_shipping_unit": min_ship})
+                    save_item_spec_master(out_rows)
+                    if _draft_key in st.session_state:
+                        del st.session_state[_draft_key]
+                    st.success("✅ マスターデータを保存しました。（config/item_spec_master.json）")
+                    st.rerun()
+            with col_reload:
+                if st.button("🔄 ファイルの内容に戻す", key="reload_master_btn", help="未保存の編集を破棄し、保存済みファイルの内容を再表示します"):
+                    if _draft_key in st.session_state:
+                        del st.session_state[_draft_key]
+                    st.rerun()
     st.divider()
     st.caption("新規追加: 品目と規格（任意）を入力して追加します。")
     new_item = st.text_input("品目名", placeholder="例: 胡瓜", key="new_item_input")
@@ -1021,6 +1054,8 @@ with tab5:
                 "receive_as_boxes": False,
             })
             save_item_spec_master(spec_master)
+            if "item_spec_master_draft" in st.session_state:
+                del st.session_state["item_spec_master_draft"]
             st.session_state[f"item_expanded_{item_name}"] = True
             st.success(f"✅ 「{item_name}」" + (f"（規格: {spec_name}）" if spec_name else "") + " を追加しました")
             st.rerun()
