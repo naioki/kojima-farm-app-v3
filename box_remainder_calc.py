@@ -57,3 +57,24 @@ def check_invariant(unit: int, boxes: int, remainder: int) -> bool:
     if remainder < 0 or remainder >= unit:
         return False
     return True
+
+
+def validate_entry_invariant(entry: dict) -> tuple[bool, str]:
+    """
+    1件の entry（unit, boxes, remainder, および任意で total）の不変条件を検証する。
+    解析結果やUIのデータが正しいか確認するときに使う。
+    Returns:
+        (ok, message): 不変条件を満たせば (True, "")、違反なら (False, 理由)。
+    """
+    unit = int(entry.get("unit", 0)) if entry.get("unit") is not None else 0
+    boxes = int(entry.get("boxes", 0)) if entry.get("boxes") is not None else 0
+    remainder = int(entry.get("remainder", 0)) if entry.get("remainder") is not None else 0
+    total_from_entry = entry.get("total")
+    if total_from_entry is not None:
+        total_from_entry = int(total_from_entry)
+    computed_total = boxes_remainder_to_total(unit, boxes, remainder)
+    if unit > 0 and (remainder < 0 or remainder >= unit):
+        return False, f"端数 {remainder} は 0 <= 端数 < 入数({unit}) を満たしません"
+    if total_from_entry is not None and computed_total != total_from_entry:
+        return False, f"不変条件違反: 入数×箱数+端数={computed_total} と total={total_from_entry} が一致しません"
+    return True, ""
