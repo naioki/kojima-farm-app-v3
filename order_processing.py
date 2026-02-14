@@ -173,14 +173,15 @@ def validate_store_name(store_name, auto_learn=True):
 
 def parse_order_image(image: Image.Image, api_key: str) -> list:
     genai.configure(api_key=api_key)
+    # 優先: gemini-1.5-flash（画像対応・利用可能）。不可なら順にフォールバック。
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
         except Exception:
             try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash')
             except Exception:
                 try:
                     model = genai.GenerativeModel('gemini-1.5-pro')
@@ -262,11 +263,12 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list:
     """メール本文（テキスト）を解析して注文データを抽出"""
     genai.configure(api_key=api_key)
+    # 優先: gemini-1.5-flash。不可ならフォールバック。
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
         except Exception:
             model = genai.GenerativeModel('gemini-pro')
             

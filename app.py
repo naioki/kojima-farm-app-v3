@@ -25,6 +25,7 @@ from config_manager import (
     load_item_spec_master, save_item_spec_master,
     DEFAULT_ITEM_SETTINGS, get_box_count_items,
     get_effective_unit_size, get_min_shipping_unit, get_known_specs_for_item, is_spec_in_master, get_default_spec_for_item,
+    extract_unit_size_from_spec,
 )
 from email_config_manager import load_email_config, save_email_config, detect_imap_server, load_sender_rules, save_sender_rules
 from email_reader import check_email_for_orders
@@ -1098,11 +1099,57 @@ with tab5:
                         st.success(f"✅ 「{normalized}」を削除しました")
                         st.rerun()
 
-if st.session_state.parsed_data:
+@st.cache_data(ttl=3)
+def _cached_editor_config():
+    """表編集ブロック用のマスタを短時間キャッシュし、セル編集のたびのファイル読みを避ける。"""
+    return load_item_spec_master(), load_item_settings(), load_stores()
+
+def _render_parsed_data_editor():
+    """解析結果の表を描画・編集。fragment で囲むと表の編集時だけこの関数が再実行され高速になる。"""
+    if not st.session_state.parsed_data:
+        return
     st.markdown("---")
     st.header("📊 解析結果の確認・編集")
     st.write("以下のテーブルでデータを確認・編集できます。規格を変更すると入数・合計数量が再計算されます。編集後は「ラベルを生成」ボタンを押してください。")
     st.caption("品目・規格は一覧から選択できます（マスタ＋表の既存値）。入数は数値で直接入力できます。新しい品目は「設定管理」の品目名管理で追加してください。")
+    # マスタを1回だけ読み込み（3秒キャッシュで編集時の再読み込みを削減）
+    _spec_master, _item_settings, _stores_list = _cached_editor_config()
+    # (品目, 規格) -> 設定 のルックアップ（get_item_setting 相当をメモリ上で実行）
+    _setting_lookup = {}
+    for r in _spec_master:
+        it = (r.get("品目") or "").strip()
+        sp = (r.get("規格") or "").strip()
+        _setting_lookup[(it, sp)] = {
+            "default_unit": int(r.get("default_unit", 0)) or 0,
+            "unit_type": (r.get("unit_type") or "袋").strip() or "袋",
+            "receive_as_boxes": bool(r.get("receive_as_boxes", False)),
+            "min_shipping_unit": int(r.get("min_shipping_unit", 0)) or 0,
+        }
+    for item_name, s in _item_settings.items():
+        key = (item_name.strip(), "")
+        if key not in _setting_lookup:
+            _setting_lookup[key] = {
+                "default_unit": int(s.get("default_unit", 0)) or 0,
+                "unit_type": (s.get("unit_type") or "袋").strip() or "袋",
+                "receive_as_boxes": bool(s.get("receive_as_boxes", False)),
+                "min_shipping_unit": int(s.get("min_shipping_unit", 0)) or 0,
+            }
+
+    def _get_setting_from_lookup(item: str, spec: str):
+        spec_s = (spec or "").strip()
+        it = (item or "").strip()
+        out = _setting_lookup.get((it, spec_s)) or _setting_lookup.get((it, ""))
+        if out:
+            return out
+        return {"default_unit": 0, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 0}
+
+    def _effective_unit_from_lookup(item: str, spec: str):
+        setting = _get_setting_from_lookup(item, spec)
+        u = int(setting.get("default_unit", 0)) or 0
+        if u > 0:
+            return u
+        return extract_unit_size_from_spec(spec)
+
     df_data = []
     for entry in st.session_state.parsed_data:
         item_name = entry.get('item', '')
@@ -1111,39 +1158,32 @@ if st.session_state.parsed_data:
         spec_s = str(spec_raw).strip() if spec_raw is not None else ''
         if spec_s.lower() in ('none', 'nan'):
             spec_s = ''
-        # 規格が空のときの自動入力: (1) 品目が胡瓜バラ/胡瓜平箱/長ねぎバラならバラ・平箱を補う (2) マスタに非空規格が1つだけならそれを使う
+        # 規格が空のときの表示用デフォルト（entry は書き換えず表示用の spec_s だけ設定）
         if not spec_s and (normalized_item or item_name):
             item_key = (normalized_item or item_name).strip()
             composite_spec = {"胡瓜バラ": "バラ", "胡瓜平箱": "平箱", "長ねぎバラ": "バラ", "長ネギバラ": "バラ"}.get(item_key, "")
             if composite_spec:
                 spec_s = composite_spec
-                entry['spec'] = spec_s
             else:
-                known = get_known_specs_for_item(normalized_item or item_name)
-                non_empty = [s for s in known if s and str(s).strip()]
-                if len(non_empty) == 1:
-                    spec_s = str(non_empty[0]).strip()
-                    entry['spec'] = spec_s
+                known = [r.get("規格") or "" for r in _spec_master if (r.get("品目") or "").strip() == item_key]
+                known = [s for s in known if s and str(s).strip()]
+                if len(known) == 1:
+                    spec_s = str(known[0]).strip()
         unit = safe_int(entry.get('unit', 0))
         boxes = safe_int(entry.get('boxes', 0))
         remainder = safe_int(entry.get('remainder', 0))
-        effective_unit = get_effective_unit_size(normalized_item or item_name, spec_s)
-        item_setting_boxes = get_item_setting(normalized_item or item_name, spec_s)
+        effective_unit = _effective_unit_from_lookup(normalized_item or item_name, spec_s)
+        item_setting_boxes = _get_setting_from_lookup(normalized_item or item_name, spec_s)
         receive_as_boxes = bool(item_setting_boxes.get("receive_as_boxes", False))
-        # 「胡瓜バラ100×10」でAIが unit=10, boxes=0, remainder=0 の場合 → 入数100×単位数10=1000に補正
         if effective_unit > 0 and unit > 0 and unit < effective_unit and boxes == 0 and remainder == 0:
             unit = effective_unit
             boxes = safe_int(entry.get('unit', 0))
             remainder = 0
-        # 平箱のみ:「100×10」で10が箱数の場合の補正。春菊など個数品目では remainder は端数なので変換しない
         elif receive_as_boxes and effective_unit > 0 and unit == effective_unit and boxes == 0 and 0 < remainder < effective_unit:
             boxes = remainder
             remainder = 0
-            entry['boxes'] = boxes
-            entry['remainder'] = 0
         if unit == 0 and effective_unit > 0:
             unit = effective_unit
-        # 表示用の入数は入り数マスタ（品目名管理）を常に優先する（AIの誤った入数で表示しない）
         if effective_unit > 0:
             unit = effective_unit
         total_quantity = (unit * boxes) + remainder
@@ -1152,28 +1192,25 @@ if st.session_state.parsed_data:
     # 規格の NaN / "None" を空文字に統一（プルダウンで選択肢にないとエラーになるため）
     if not df.empty and "規格" in df.columns:
         df["規格"] = df["規格"].fillna("").astype(str).str.strip().replace("None", "").replace("nan", "")
-    # 品目・規格は選択＋既存値のハイブリッド用に選択肢を組み立て（マスタ＋現在の表の値＋品目別既定規格）
+    # 品目・規格は選択＋既存値のハイブリッド用に選択肢を組み立て（既読のマスタ＋表の値）
     _items_dict = load_items()
     _item_names = set(_items_dict.keys()) | {v for variants in _items_dict.values() for v in (variants or [])}
-    _spec_master = load_item_spec_master()
     _item_names |= {(r.get("品目") or "").strip() for r in _spec_master if (r.get("品目") or "").strip()}
     _spec_names = {(r.get("規格") or "").strip() for r in _spec_master}
     if not df.empty:
         _item_names |= set(df["品目"].dropna().astype(str).str.strip())
         _spec_names |= set(df["規格"].dropna().astype(str).str.strip())
-        # 春菊→1束・青梗菜→2~3株など品目別既定規格を選択肢に追加（マスタに未登録でも選べるように）
         for _item in df["品目"].dropna().astype(str).str.strip().unique():
             _d = get_default_spec_for_item(_item)
             if _d:
                 _spec_names.add(_d)
     item_options = sorted(x for x in _item_names if x)
     spec_options = [""] + sorted(x for x in _spec_names if x)
-    # 品目: 選択肢があればSelectbox（マスタ＋表の既存値）、なければ手入力のTextColumn
     col_品目 = st.column_config.SelectboxColumn("品目", options=item_options, required=True) if item_options else st.column_config.TextColumn("品目", required=True)
     col_規格 = st.column_config.SelectboxColumn("規格", options=spec_options) if spec_options else st.column_config.TextColumn("規格")
-    edited_df = st.data_editor(df, width="stretch", num_rows="dynamic",
+    edited_df = st.data_editor(df, width="stretch", num_rows="dynamic", key="parsed_data_editor",
         column_config={
-            "店舗名": st.column_config.SelectboxColumn("店舗名", options=load_stores(), required=True),
+            "店舗名": st.column_config.SelectboxColumn("店舗名", options=_stores_list, required=True),
             "品目": col_品目,
             "規格": col_規格,
             "入数(unit)": st.column_config.NumberColumn("入数(unit)", min_value=0, step=1),
@@ -1194,7 +1231,7 @@ if st.session_state.parsed_data:
             ospec = orig_row.get('規格')
             orig_spec = '' if pd.isna(ospec) else str(ospec).strip()
         if spec_val != orig_spec:
-            eff = get_effective_unit_size(normalize_item_name(row.get('品目', '')) or row.get('品目', ''), spec_val)
+            eff = _effective_unit_from_lookup(normalize_item_name(row.get('品目', '')) or row.get('品目', ''), spec_val)
             if eff > 0:
                 edited_df.at[idx, '入数(unit)'] = eff
     u = edited_df['入数(unit)'].fillna(0)
@@ -1313,6 +1350,16 @@ if st.session_state.parsed_data:
             except Exception as e:
                 st.error(format_error_display(e, "ラベル生成"))
                 st.exception(e)
+
+# 表編集時は fragment 内だけ再実行し、全体の再描画を避けて高速に（Streamlit 1.35+）
+_fragment_decorator = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
+if _fragment_decorator and st.session_state.parsed_data:
+    @_fragment_decorator
+    def _parsed_editor_fragment():
+        _render_parsed_data_editor()
+    _parsed_editor_fragment()
+elif st.session_state.parsed_data:
+    _render_parsed_data_editor()
 
 if st.session_state.labels and st.session_state.parsed_data:
     st.markdown("---")
