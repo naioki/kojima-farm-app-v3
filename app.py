@@ -80,6 +80,8 @@ if 'email_config' not in st.session_state:
     st.session_state.email_config = load_email_config(secrets_obj)
 if 'email_password' not in st.session_state:
     st.session_state.email_password = ""
+if 'email_check_results' not in st.session_state:
+    st.session_state.email_check_results = None
 
 if 'default_units_initialized' not in st.session_state:
     initialize_default_units()
@@ -465,7 +467,7 @@ with tab1:
                         validated_data = validate_and_fix_order_data(order_data)
                         st.session_state.parsed_data = validated_data
                         st.session_state.labels = []
-                        st.success(f"✅ {len(validated_data)}件のデータを読み取りました")
+                        st.success(f"✅ {len(validated_data)}件を読み取りました。下の表で内容を確認・編集し、「📋 ラベルを生成」でPDFを作成できます。")
                         st.rerun()
                     else:
                         st.error("解析に失敗しました。")
@@ -479,23 +481,6 @@ with tab2:
     st.subheader("📧 メール自動読み取り")
     st.write("メールから注文を自動取得して解析します。（画像・テキスト対応）")
     saved_config = st.session_state.email_config
-    try:
-        if hasattr(st, 'secrets'):
-            try:
-                secrets_email = st.secrets.get("email", {})
-                if secrets_email and secrets_email.get("email_address"):
-                    saved_config = {
-                        "imap_server": secrets_email.get("imap_server", detect_imap_server(secrets_email.get("email_address", ""))),
-                        "email_address": secrets_email.get("email_address", ""),
-                        "sender_email": secrets_email.get("sender_email", ""),
-                        "days_back": secrets_email.get("days_back", 1)
-                    }
-                    st.session_state.email_config = saved_config
-                    st.info("💡 Streamlit Secretsから設定を読み込みました")
-            except Exception:
-                pass
-    except Exception:
-        pass
     with st.expander("📮 メール設定", expanded=False):
         default_imap = saved_config.get("imap_server", "") or (detect_imap_server(saved_config.get("email_address", "")) if saved_config.get("email_address") else "imap.gmail.com")
         imap_server = st.text_input("IMAPサーバー", value=default_imap or "imap.gmail.com")
@@ -522,58 +507,12 @@ with tab2:
                 try:
                     with st.spinner('メールをチェック中...'):
                         results = check_email_for_orders(imap_server=imap_server, email_address=email_address, password=email_password, sender_email=sender_email if sender_email else None, days_back=days_back)
-                    
-                    sender_rules = load_sender_rules()
-                    
                     if results:
-                        st.success(f"✅ {len(results)}件のデータを受信しました")
-                        for idx, result in enumerate(results):
-                            sender_addr = result['from']
-                            rule = sender_rules.get(sender_addr, {}) # Exact match logic for now
-                            # Try to match by email inside "Name <email>" if possible, but exact match is safer first.
-                            # If key not found, try to extract email from "Name <email>" and check again?
-                            # For simplicity, we use what 'from' returns (which might be "Name <email>").
-                            # Ideally email_config_manager should handle fuzzy matching, but let's stick to exact or simple.
-                            # Actually result['from'] is decoded subject which might be full string.
-                            # Let's extract email address if possible.
-                            
-                            rule_mode = rule.get("mode", "image")
-                            
-                            subject_display = f"{result['subject']} ({result['date']})"
-                            with st.expander(f"📎 {result['filename']} - {subject_display}"):
-                                is_image = result.get('image') is not None
-                                body_text = result.get('body_text', '')
-                                
-                                parse_type = "none"
-                                if is_image:
-                                    st.image(result['image'], caption=result['filename'], use_container_width=True)
-                                    parse_type = "image"
-                                elif body_text:
-                                    st.text_area("メール本文", body_text, height=150)
-                                    parse_type = "text"
-                                
-                                label = "🔍 解析を実行"
-                                if parse_type == "image":
-                                    label = "🔍 画像を解析"
-                                elif parse_type == "text":
-                                    label = "🔍 本文を解析"
-                                
-                                if parse_type != "none":
-                                    if st.button(label, key=f"parse_{idx}_{parse_type}"):
-                                        with st.spinner('解析中...'):
-                                            parsed = None
-                                            if parse_type == "image":
-                                                parsed = parse_order_image(result['image'], api_key)
-                                            else:
-                                                parsed = parse_order_text(body_text, sender_addr, result['subject'], api_key)
-                                            
-                                            if parsed:
-                                                validated_data = validate_and_fix_order_data(parsed)
-                                                st.session_state.parsed_data = validated_data
-                                                st.session_state.labels = []
-                                                st.success(f"✅ {len(validated_data)}件のデータを読み取りました")
-                                                st.rerun()
+                        st.session_state.email_check_results = results
+                        st.success(f"✅ {len(results)}件のデータを受信しました。下の「本文を解析」で抽出できます。")
+                        st.rerun()
                     else:
+                        st.session_state.email_check_results = None
                         st.info("新しいメールは見つかりませんでした。")
                 except Exception as e:
                     st.error(format_error_display(e, "メールチェック"))
@@ -583,12 +522,54 @@ with tab2:
         if st.button("🔄 設定をリセット", use_container_width=True):
             st.session_state.email_password = ""
             st.rerun()
+        if st.session_state.get("email_check_results"):
+            if st.button("📭 受信リストをクリア", use_container_width=True):
+                st.session_state.email_check_results = None
+                st.rerun()
     if saved_config.get("email_address"):
-        st.success(f"💾 設定が保存されています: **{saved_config.get('email_address')}**")
+        st.info(f"💾 使用中のメール: **{saved_config.get('email_address')}**")
+    if st.session_state.get("email_check_results"):
+        results = st.session_state.email_check_results
+        sender_rules = load_sender_rules()
+        for idx, result in enumerate(results):
+            sender_addr = result.get("from", "")
+            subject_display = f"{result.get('subject', '')} ({result.get('date', '')})"
+            with st.expander(f"📎 {result.get('filename', '')} - {subject_display}"):
+                is_image = result.get("image") is not None
+                body_text = result.get("body_text", "")
+                parse_type = "image" if is_image else ("text" if body_text else "none")
+                if is_image:
+                    st.image(result["image"], caption=result.get("filename", ""), use_container_width=True)
+                elif body_text:
+                    st.text_area("メール本文", body_text, height=150, key=f"body_{idx}")
+                label = "🔍 画像を解析" if parse_type == "image" else ("🔍 本文を解析" if parse_type == "text" else "")
+                if parse_type != "none" and label:
+                    if st.button(label, key=f"parse_{idx}_{parse_type}"):
+                        api_key = st.session_state.get("api_key", "")
+                        if not api_key:
+                            st.error("APIキーを設定してください（設定管理タブまたはサイドバー）")
+                        else:
+                            with st.spinner("解析中..."):
+                                parsed = None
+                                if parse_type == "image":
+                                    parsed = parse_order_image(result["image"], api_key)
+                                else:
+                                    parsed = parse_order_text(body_text, sender_addr, result.get("subject", ""), api_key)
+                                if parsed:
+                                    validated_data = validate_and_fix_order_data(parsed)
+                                    st.session_state.parsed_data = validated_data
+                                    st.session_state.labels = []
+                                    st.session_state.email_check_results = None
+                                    st.success(f"✅ {len(validated_data)}件を読み取りました。下の表で内容を確認・編集し、「📋 ラベルを生成」でPDFを作成できます。")
+                                    st.rerun()
+                                else:
+                                    st.warning("解析できませんでした。APIキーと本文を確認してください。")
 
 with tab3:
     st.subheader("📋 未確定一覧")
     st.caption("台帳スプレッドシートから「確定フラグ」が空または「未確定」の行を表示します。取りこぼし・誤解析の確認に使えます。")
+    if st.session_state.get("parsed_data"):
+        st.info("📌 メール・画像で解析したデータは**このタブではなく**、ページ下の「📊 解析結果の確認・編集」で編集し、「📋 ラベルを生成」でPDFを作成してください。")
     try:
         secrets_obj = getattr(st, "secrets", None)
     except Exception:
@@ -1110,7 +1091,7 @@ def _render_parsed_data_editor():
         return
     st.markdown("---")
     st.header("📊 解析結果の確認・編集")
-    st.write("以下のテーブルでデータを確認・編集できます。規格を変更すると入数・合計数量が再計算されます。編集後は「ラベルを生成」ボタンを押してください。")
+    st.write("以下のテーブルでデータを確認・編集できます。規格を変更すると入数・合計数量が再計算されます。編集後は下の **「📋 ラベルを生成」** でPDFを作成してください。")
     st.caption("品目・規格は一覧から選択できます（マスタ＋表の既存値）。入数・箱数・端数は入力と同時に保存され、合計数量は自動計算されます。マスタ未登録の行も編集できます。")
     # マスタを1回だけ読み込み（3秒キャッシュで編集時の再読み込みを削減）
     _spec_master, _item_settings, _stores_list = _cached_editor_config()

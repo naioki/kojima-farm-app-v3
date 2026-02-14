@@ -32,6 +32,21 @@ def ensure_config_dir():
     CONFIG_DIR.mkdir(exist_ok=True)
 
 def load_email_config(st_secrets=None) -> Dict:
+    """保存済み設定を返す。ファイル保存を優先し、未保存時のみ Secrets を使う。"""
+    ensure_config_dir()
+    if EMAIL_CONFIG_FILE.exists():
+        try:
+            with open(EMAIL_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                if config.get("email_address"):
+                    return {
+                        "imap_server": config.get("imap_server", ""),
+                        "email_address": config.get("email_address", ""),
+                        "sender_email": config.get("sender_email", ""),
+                        "days_back": config.get("days_back", 1),
+                    }
+        except Exception:
+            pass
     if st_secrets is not None:
         try:
             secrets = st_secrets.get("email", {})
@@ -40,20 +55,7 @@ def load_email_config(st_secrets=None) -> Dict:
                     "imap_server": secrets.get("imap_server", ""),
                     "email_address": secrets.get("email_address", ""),
                     "sender_email": secrets.get("sender_email", ""),
-                    "days_back": secrets.get("days_back", 1)
-                }
-        except Exception:
-            pass
-    ensure_config_dir()
-    if EMAIL_CONFIG_FILE.exists():
-        try:
-            with open(EMAIL_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                return {
-                    "imap_server": config.get("imap_server", ""),
-                    "email_address": config.get("email_address", ""),
-                    "sender_email": config.get("sender_email", ""),
-                    "days_back": config.get("days_back", 1)
+                    "days_back": secrets.get("days_back", 1),
                 }
         except Exception:
             pass
