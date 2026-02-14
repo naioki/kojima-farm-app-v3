@@ -4,6 +4,7 @@
 """
 import json
 import re
+import time
 import google.generativeai as genai
 import streamlit as st # UIフィードバック用に一時的に維持
 from PIL import Image
@@ -171,19 +172,35 @@ def validate_store_name(store_name, auto_learn=True):
         return auto_learn_store(store_name)
     return None
 
+def _generate_content_with_retry(model, contents, max_retries=2):
+    """429 クォータ超過時はメッセージ内の待機秒数で待ってリトライする。"""
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            return model.generate_content(contents)
+        except Exception as e:
+            last_err = e
+            err_str = str(e).lower()
+            if attempt < max_retries and ("429" in err_str or "quota" in err_str or "rate" in err_str):
+                wait_sec = 10
+                m = re.search(r"retry in (\d+(?:\.\d+)?)\s*s", str(e), re.IGNORECASE)
+                if m:
+                    wait_sec = min(60, max(1, float(m.group(1))))
+                time.sleep(wait_sec)
+                continue
+            raise
+    raise last_err
+
 def parse_order_image(image: Image.Image, api_key: str) -> list:
     genai.configure(api_key=api_key)
-    # 2.5 は利用上限のため使用しない。2.0-flash → 1.5-flash → 1.5-pro の順で試す。
+    # 無料枠クォータを考慮し 1.5 系を優先（2.0/2.5 は上限になりやすい）。1.5-flash → 1.5-pro → pro-vision。
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-pro')
         except Exception:
-            try:
-                model = genai.GenerativeModel('gemini-1.5-pro')
-            except Exception:
-                model = genai.GenerativeModel('gemini-pro-vision')
+            model = genai.GenerativeModel('gemini-pro-vision')
     known_stores = get_known_stores()
     item_normalization = get_item_normalization()
     store_list = "、".join(known_stores)
@@ -227,7 +244,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
     必ず全ての店舗と品目を漏れなく読み取ってください。
     """
     try:
-        response = model.generate_content([prompt, image])
+        response = _generate_content_with_retry(model, [prompt, image])
         text = response.text.strip()
         if '```json' in text:
             text = text.split('```json')[1].split('```')[0].strip()
@@ -260,12 +277,12 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list:
     """メール本文（テキスト）を解析して注文データを抽出"""
     genai.configure(api_key=api_key)
-    # 2.5 は利用上限のため使用しない。2.0-flash → 1.5-flash → gemini-pro。
+    # 無料枠クォータを考慮し 1.5 系を優先。1.5-flash → 1.5-pro → gemini-pro。
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-pro')
         except Exception:
             model = genai.GenerativeModel('gemini-pro')
             
@@ -309,7 +326,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
     """
     
     try:
-        response = model.generate_content(prompt)
+        response = _generate_content_with_retry(model, prompt)
         text_resp = response.text.strip()
         if '```json' in text_resp:
             text_resp = text_resp.split('```json')[1].split('```')[0].strip()
