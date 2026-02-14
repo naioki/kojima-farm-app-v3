@@ -1289,11 +1289,13 @@ with tab5:
                 "1コンテナあたりの入数": u,
                 "単位": t,
                 "受信方法": "箱数" if as_boxes else "総数",
+                "削除": False,
             })
         return rows
     if spec_master:
         if _draft_key in st.session_state and st.session_state[_draft_key]:
-            master_rows = st.session_state[_draft_key]
+            draft_list = st.session_state[_draft_key]
+            master_rows = [{**r, "削除": False} for r in draft_list]
             st.info("📝 未保存の編集があります。反映するには「マスターデータを保存」を押してください。")
         else:
             master_rows = _spec_to_display_rows(spec_master)
@@ -1306,10 +1308,13 @@ with tab5:
                     "1コンテナあたりの入数": st.column_config.NumberColumn("1コンテナあたりの入数", min_value=1, step=1),
                     "単位": st.column_config.SelectboxColumn("単位", options=["袋", "本"], required=True),
                     "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True),
+                    "削除": st.column_config.CheckboxColumn("削除", help="削除する行にチェックを入れ、下の「マスターデータを保存」で反映"),
                 })
-            # 編集結果をドラフトとして保持（ファイルと異なる場合のみ。次回表示で消えないようにする）
+            # 編集結果をドラフトとして保持（「削除」にチェックした行は除外。ファイルと異なる場合のみ保持）
             draft_rows = []
             for _, row in edited_master.iterrows():
+                if row.get("削除") is True:
+                    continue
                 draft_rows.append({
                     "品目": str(row.get("品目", "")).strip(),
                     "規格": str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else "",
@@ -1318,7 +1323,8 @@ with tab5:
                     "受信方法": str(row["受信方法"]).strip(),
                 })
             file_display = _spec_to_display_rows(spec_master)
-            if draft_rows != file_display:
+            file_display_for_compare = [{k: v for k, v in r.items() if k != "削除"} for r in file_display]
+            if draft_rows != file_display_for_compare:
                 st.session_state[_draft_key] = draft_rows
             elif _draft_key in st.session_state:
                 del st.session_state[_draft_key]
@@ -1328,6 +1334,8 @@ with tab5:
                     key_to_orig = {((r.get("品目") or "").strip(), (r.get("規格") or "").strip()): r for r in spec_master}
                     out_rows = []
                     for _, row in edited_master.iterrows():
+                        if row.get("削除") is True:
+                            continue
                         name = str(row.get("品目", "")).strip()
                         spec = str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else ""
                         u = int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30

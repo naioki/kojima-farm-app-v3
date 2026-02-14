@@ -317,12 +317,25 @@ def save_item_spec_master(rows: List[Dict[str, Any]]) -> None:
     save_item_settings(settings)
 
 
+# 品目・規格が分かれて解析された場合に、品目名管理の「品目（複合名）」で再検索するための対応表。
+# 解析結果が 品目=胡瓜・規格=バラ のとき、マスタの「胡瓜バラ」行（100入り等）を参照する。
+ITEM_SPEC_COMPOSITE_LOOKUP = {
+    ("胡瓜", "バラ"): "胡瓜バラ",
+    ("胡瓜", "平箱"): "胡瓜平箱",
+    ("長ネギ", "バラ"): "長ねぎバラ",
+    ("長ねぎ", "バラ"): "長ねぎバラ",
+}
+
+
 def get_item_setting(item: str, spec: Optional[str] = None) -> Dict[str, Any]:
-    """品目（と規格）に一致する設定を返す。spec は省略可（その場合は規格なしを優先）。"""
+    """品目（と規格）に一致する設定を返す。spec は省略可（その場合は規格なしを優先）。
+    (胡瓜, バラ) のように分かれた場合は 胡瓜バラ の行も参照する。"""
     spec_s = (spec or "").strip()
+    item_s = (item or "").strip()
     rows = load_item_spec_master()
+
     for r in rows:
-        if (r.get("品目") or "").strip() != (item or "").strip():
+        if (r.get("品目") or "").strip() != item_s:
             continue
         r_spec = (r.get("規格") or "").strip()
         if r_spec == spec_s:
@@ -332,6 +345,23 @@ def get_item_setting(item: str, spec: Optional[str] = None) -> Dict[str, Any]:
                 "receive_as_boxes": bool(r.get("receive_as_boxes", False)),
                 "min_shipping_unit": int(r.get("min_shipping_unit", 0)) or 0,
             }
+
+    # 品目+規格が分かれている場合: 複合名（胡瓜バラ等）の行を参照
+    if spec_s:
+        composite_item = ITEM_SPEC_COMPOSITE_LOOKUP.get((item_s, spec_s))
+        if composite_item:
+            for r in rows:
+                if (r.get("品目") or "").strip() != composite_item:
+                    continue
+                r_spec = (r.get("規格") or "").strip()
+                if r_spec == spec_s:
+                    return {
+                        "default_unit": int(r.get("default_unit", 0)) or 0,
+                        "unit_type": (r.get("unit_type") or "袋").strip() or "袋",
+                        "receive_as_boxes": bool(r.get("receive_as_boxes", False)),
+                        "min_shipping_unit": int(r.get("min_shipping_unit", 0)) or 0,
+                    }
+
     if spec_s != "":
         for r in rows:
             if (r.get("品目") or "").strip() == (item or "").strip() and (r.get("規格") or "").strip() == "":

@@ -1,10 +1,66 @@
 [
-  {"品目": "胡瓜", "規格": "3本", "default_unit": 30, "unit_type": "袋", "receive_as_boxes": false, "min_shipping_unit": 0},
-  {"品目": "胡瓜平箱", "規格": "平箱", "default_unit": 50, "unit_type": "袋", "receive_as_boxes": true, "min_shipping_unit": 0},
-  {"品目": "胡瓜バラ", "規格": "バラ", "default_unit": 100, "unit_type": "本", "receive_as_boxes": false, "min_shipping_unit": 0},
-  {"品目": "長ネギ", "規格": "2本", "default_unit": 30, "unit_type": "本", "receive_as_boxes": false, "min_shipping_unit": 0},
-  {"品目": "長ネギ", "規格": "", "default_unit": 30, "unit_type": "本", "receive_as_boxes": false, "min_shipping_unit": 0},
-  {"品目": "長ねぎバラ", "規格": "バラ", "default_unit": 50, "unit_type": "本", "receive_as_boxes": false, "min_shipping_unit": 0},
-  {"品目": "春菊", "規格": "1束", "default_unit": 30, "unit_type": "袋", "receive_as_boxes": false, "min_shipping_unit": 0},
-  {"品目": "青梗菜", "規格": "2~3株", "default_unit": 20, "unit_type": "袋", "receive_as_boxes": false, "min_shipping_unit": 0}
+  {
+    "品目": "胡瓜",
+    "規格": "3本",
+    "default_unit": 30,
+    "unit_type": "袋",
+    "receive_as_boxes": false,
+    "min_shipping_unit": 0
+  },
+  {
+    "品目": "胡瓜平箱",
+    "規格": "平箱",
+    "default_unit": 50,
+    "unit_type": "袋",
+    "receive_as_boxes": true,
+    "min_shipping_unit": 0
+  },
+  {
+    "品目": "胡瓜バラ",
+    "規格": "バラ",
+    "default_unit": 100,
+    "unit_type": "本",
+    "receive_as_boxes": true,
+    "min_shipping_unit": 0
+  },
+  {
+    "品目": "長ネギ",
+    "規格": "2本",
+    "default_unit": 30,
+    "unit_type": "本",
+    "receive_as_boxes": false,
+    "min_shipping_unit": 0
+  },
+  {
+    "品目": "長ネギ",
+    "規格": "",
+    "default_unit": 30,
+    "unit_type": "本",
+    "receive_as_boxes": false,
+    "min_shipping_unit": 0
+  },
+  {
+    "品目": "長ねぎバラ",
+    "規格": "バラ",
+    "default_unit": 50,
+    "unit_type": "本",
+    "receive_as_boxes": false,
+    "min_shipping_unit": 0
+  },
+  {
+    "品目": "春菊",
+    "規格": "1束",
+    "default_unit": 30,
+    "unit_type": "袋",
+    "receive_as_boxes": false,
+    "min_shipping_unit": 0
+  },
+  {
+    "品目": "青梗菜",
+    "規格": "2~3株",
+    "default_unit": 20,
+    "unit_type": "袋",
+    "receive_as_boxes": false,
+    "min_shipping_unit": 0
+  }
 ]
