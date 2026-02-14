@@ -14,6 +14,8 @@ except ImportError:
     def get_effective_unit_size(_item: str, _spec: Optional[str] = None) -> int:
         return 0
 
+from box_remainder_calc import total_to_boxes_remainder, boxes_remainder_to_total
+
 _DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d")
 _OUTPUT_DATE_FMT = "%Y/%m/%d"
 
@@ -61,7 +63,7 @@ def _compute_quantity(item: str, spec: str, unit: int, boxes: int, remainder: in
     # 入数が unit、単位数が remainder に入っているパターン（例: 100×10 → unit=100, remainder=10）
     if effective > 0 and unit == effective and boxes == 0 and 0 < remainder < effective:
         return effective * remainder
-    return (unit * boxes) + remainder
+    return boxes_remainder_to_total(unit, boxes, remainder)
 
 
 def _lookup_unit_price(item: str, spec: str, prices: Dict) -> float:
@@ -233,8 +235,7 @@ def ledger_rows_to_v2_format_with_units(
                 pass
         if unit <= 0:
             unit = 1
-        boxes = qty // unit
-        remainder = qty % unit
+        boxes, remainder = total_to_boxes_remainder(qty, unit)
         v2_list.append({
             "store": store,
             "item": item,

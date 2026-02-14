@@ -20,6 +20,7 @@ from config_manager import (
     get_default_spec_for_item,
 )
 from error_display_util import format_error_display
+from box_remainder_calc import total_to_boxes_remainder
 
 def safe_int(v):
     if v is None:
@@ -59,8 +60,9 @@ def _compute_boxes_remainder_from_total(entries: list) -> None:
             entry["remainder"] = total
         else:
             entry["unit"] = unit
-            entry["boxes"] = total // unit
-            entry["remainder"] = total % unit
+            boxes, remainder = total_to_boxes_remainder(total, unit)
+            entry["boxes"] = boxes
+            entry["remainder"] = remainder
 
 
 def _fix_boxes_remainder_when_count_misread_as_boxes(entries: list) -> None:
@@ -85,8 +87,7 @@ def _fix_boxes_remainder_when_count_misread_as_boxes(entries: list) -> None:
             continue
         if boxes <= unit:
             total = boxes
-            entry["boxes"] = total // unit
-            entry["remainder"] = total % unit
+            entry["boxes"], entry["remainder"] = total_to_boxes_remainder(total, unit)
 
 
 def normalize_spec_from_parse(spec_str: str) -> str:
@@ -360,9 +361,10 @@ def validate_and_fix_order_data(order_data, auto_learn=True):
         item_setting_for_boxes = get_item_setting(normalized_item or item, spec_for_lookup)
         receive_as_boxes = bool(item_setting_for_boxes.get("receive_as_boxes", False))
         if effective_unit > 0 and unit > 0 and unit < effective_unit and boxes == 0 and remainder == 0:
-            boxes = unit
+            # unit に総数が入っていた場合: 箱数＝総数÷入数 の商、端数＝余りで再計算
+            total_as_count = unit
             unit = effective_unit
-            remainder = 0
+            boxes, remainder = total_to_boxes_remainder(total_as_count, unit)
         elif receive_as_boxes and effective_unit > 0 and unit == effective_unit and boxes == 0 and 0 < remainder < effective_unit:
             # 平箱のみ: 「100×10」で10が箱数の場合の補正。春菊など個数品目では remainder は端数なので変換しない
             boxes = remainder

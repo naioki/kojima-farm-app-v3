@@ -41,6 +41,7 @@ from order_processing import (
     parse_order_image, parse_order_text, validate_and_fix_order_data,
     normalize_item_name, validate_store_name
 )
+from box_remainder_calc import total_to_boxes_remainder
 
 # 台帳スプレッドシートのデフォルトID（Secretsに未設定の場合に使用）
 DEFAULT_LEDGER_SPREADSHEET_ID = "1KJtpiaPjyH2bTaxULWwgemhZTCymfvsZPftfryQzXG4"
@@ -51,6 +52,169 @@ st.set_page_config(
     page_icon="📦",
     layout="wide"
 )
+
+# 🌱 小島農園ブランディング：グリーンテーマのカスタムCSS
+st.markdown("""
+<style>
+    /* メインカラー：清潔感のある農業グリーン */
+    :root {
+        --primary-green: #4CAF50;
+        --light-green: #E8F5E9;
+        --dark-green: #2E7D32;
+        --accent-green: #81C784;
+        --warning-red: #FFEBEE;
+        --success-bg: #C8E6C9;
+    }
+    
+    /* 全体のフォントサイズを大きく（モバイル対応） */
+    html, body, [class*="css"] {
+        font-size: 16px !important;
+    }
+    
+    /* ヘッダー・タイトルを見やすく */
+    h1, h2, h3 {
+        color: var(--dark-green) !important;
+        font-weight: 600 !important;
+    }
+    
+    h1 { font-size: 2.2rem !important; }
+    h2 { font-size: 1.8rem !important; }
+    h3 { font-size: 1.5rem !important; }
+    
+    /* プライマリボタン：グリーンで統一 */
+    .stButton button[kind="primary"] {
+        background-color: var(--primary-green) !important;
+        color: white !important;
+        font-size: 1.1rem !important;
+        font-weight: 600 !important;
+        padding: 0.75rem 1.5rem !important;
+        border-radius: 8px !important;
+        border: none !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    .stButton button[kind="primary"]:hover {
+        background-color: var(--dark-green) !important;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important;
+        transform: translateY(-1px);
+    }
+    
+    /* セカンダリボタン */
+    .stButton button[kind="secondary"] {
+        background-color: white !important;
+        color: var(--primary-green) !important;
+        border: 2px solid var(--primary-green) !important;
+        font-size: 1.05rem !important;
+        padding: 0.7rem 1.3rem !important;
+        border-radius: 8px !important;
+    }
+    
+    .stButton button[kind="secondary"]:hover {
+        background-color: var(--light-green) !important;
+    }
+    
+    /* 通常ボタン：余白とサイズを改善 */
+    .stButton button {
+        font-size: 1.05rem !important;
+        padding: 0.6rem 1.2rem !important;
+        border-radius: 6px !important;
+        min-height: 44px !important; /* タップしやすい最小サイズ */
+    }
+    
+    /* タブのスタイル改善 */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: var(--light-green);
+        padding: 0.5rem;
+        border-radius: 10px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        font-size: 1.1rem !important;
+        font-weight: 500 !important;
+        padding: 0.75rem 1.5rem !important;
+        border-radius: 6px !important;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: var(--primary-green) !important;
+        color: white !important;
+    }
+    
+    /* 入力フィールドの視認性向上 */
+    .stTextInput input, .stNumberInput input, .stSelectbox select {
+        font-size: 1.05rem !important;
+        padding: 0.7rem !important;
+        border-radius: 6px !important;
+        border: 2px solid #E0E0E0 !important;
+    }
+    
+    .stTextInput input:focus, .stNumberInput input:focus, .stSelectbox select:focus {
+        border-color: var(--primary-green) !important;
+        box-shadow: 0 0 0 2px var(--light-green) !important;
+    }
+    
+    /* data_editor の行の色分け（単価が0または空＝赤系、入力済み＝白/緑系） */
+    .stDataFrame [data-testid="stDataFrameCell"] {
+        font-size: 1rem !important;
+    }
+    
+    /* インフォメッセージ */
+    .stInfo {
+        background-color: var(--light-green) !important;
+        border-left: 4px solid var(--primary-green) !important;
+        padding: 1rem !important;
+        border-radius: 6px !important;
+        font-size: 1.05rem !important;
+    }
+    
+    /* サクセスメッセージ */
+    .stSuccess {
+        background-color: var(--success-bg) !important;
+        border-left: 4px solid var(--dark-green) !important;
+        padding: 1rem !important;
+        border-radius: 6px !important;
+        font-size: 1.05rem !important;
+    }
+    
+    /* ワーニングメッセージ */
+    .stWarning {
+        background-color: #FFF3E0 !important;
+        border-left: 4px solid #FF9800 !important;
+        padding: 1rem !important;
+        border-radius: 6px !important;
+        font-size: 1.05rem !important;
+    }
+    
+    /* キャプション */
+    .stCaption {
+        font-size: 0.95rem !important;
+        color: #666 !important;
+        line-height: 1.6 !important;
+    }
+    
+    /* カラムの余白調整 */
+    .stColumn > div {
+        padding: 0.5rem !important;
+    }
+    
+    /* モバイル対応: 小画面では文字をさらに見やすく */
+    @media (max-width: 768px) {
+        html, body, [class*="css"] {
+            font-size: 18px !important;
+        }
+        
+        h1 { font-size: 2rem !important; }
+        h2 { font-size: 1.6rem !important; }
+        
+        .stButton button {
+            min-height: 48px !important;
+            font-size: 1.15rem !important;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # セッション状態の初期化
 if 'api_key' not in st.session_state:
@@ -225,219 +389,388 @@ with st.sidebar:
 
 # 事務用：請求管理（単価一括入力）— APIキー不要
 if nav_role == NAV_OFFICE:
-    st.title("📋 事務用：請求管理")
-    st.caption("台帳データを行ごとに取得し、日付・納品先・品目・規格で絞り込んだうえで、単価や数量を一括で変更して反映できます。")
+    st.title("🌱 小島農園 請求管理システム")
+    st.markdown("**台帳データの単価一括入力・編集が、3つのステップで簡単にできます。**")
+    
     try:
         secrets_obj_office = getattr(st, "secrets", None)
     except Exception:
         secrets_obj_office = None
     if not is_sheet_configured(secrets_obj_office):
-        st.caption("💡 台帳を読むには .streamlit/secrets.toml に [gcp] を設定するか、GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
+        st.warning("💡 台帳を読むには .streamlit/secrets.toml に [gcp] を設定するか、GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
         st.stop()
+    
+    # スプレッドシート設定（共通）
     _sid = ""
     try:
         if secrets_obj_office and hasattr(secrets_obj_office, "get"):
             _sid = secrets_obj_office.get("DELIVERY_SPREADSHEET_ID", "") or getattr(secrets_obj_office, "DELIVERY_SPREADSHEET_ID", "")
     except Exception:
         pass
-    ledger_id_office = st.text_input("台帳のスプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, key="office_ledger_id")
-    ledger_sheet_office = st.text_input("シート名", value="台帳データ", key="office_ledger_sheet")
-    st.caption("取得する納品日付範囲（「日付範囲で行を取得」で使用。絞り込みにも使います）")
-    office_col1, office_col2 = st.columns(2)
-    with office_col1:
-        office_date_from = st.date_input("納品日付（から）", value=datetime.now().date() - timedelta(days=30), key="office_date_from")
-    with office_col2:
-        office_date_to = st.date_input("納品日付（まで）", value=datetime.now().date(), key="office_date_to")
-    office_fetch_col1, office_fetch_col2 = st.columns(2)
-    with office_fetch_col1:
-        if st.button("納品単価が0または空の行を取得", type="secondary", key="office_fetch_btn"):
-            sid = (ledger_id_office or "").strip()
-            if sid:
-                ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
-                if ok:
-                    st.session_state.office_zero_unit_rows = rows
-                    st.success(msg)
-                    st.rerun()
+    
+    with st.expander("⚙️ スプレッドシート設定", expanded=False):
+        ledger_id_office = st.text_input("台帳のスプレッドシートID", value=_sid or DEFAULT_LEDGER_SPREADSHEET_ID, key="office_ledger_id")
+        ledger_sheet_office = st.text_input("シート名", value="台帳データ", key="office_ledger_sheet")
+    
+    # ===== 3ステップのタブ =====
+    office_tab1, office_tab2, office_tab3 = st.tabs([
+        "① 📊 データの検索・絞り込み",
+        "② ✏️ 単価入力・編集",
+        "③ 📈 集計・確認"
+    ])
+    
+    # ===== Tab 1: データの検索・絞り込み =====
+    with office_tab1:
+        st.subheader("📅 納品日付範囲を指定")
+        st.caption("台帳から取得するデータの日付範囲を指定してください。")
+        
+        date_col1, date_col2 = st.columns(2)
+        with date_col1:
+            office_date_from = st.date_input(
+                "納品日付（から）", 
+                value=datetime.now().date() - timedelta(days=30), 
+                key="office_date_from"
+            )
+        with date_col2:
+            office_date_to = st.date_input(
+                "納品日付（まで）", 
+                value=datetime.now().date(), 
+                key="office_date_to"
+            )
+        
+        st.markdown("---")
+        st.subheader("🔍 データ取得")
+        st.caption("ボタンを押してデータを台帳から読み込みます。")
+        
+        fetch_col1, fetch_col2 = st.columns(2)
+        with fetch_col1:
+            if st.button("💰 単価未入力の行を取得", type="secondary", key="office_fetch_btn", use_container_width=True):
+                sid = (ledger_id_office or "").strip()
+                if not sid:
+                    st.warning("スプレッドシートIDを入力してください。")
                 else:
-                    st.error(msg)
-            else:
-                st.warning("スプレッドシートIDを入力してください。")
-    with office_fetch_col2:
-        if st.button("指定した日付範囲で行を取得", type="primary", key="office_fetch_by_date_btn"):
-            sid = (ledger_id_office or "").strip()
-            if sid:
-                date_f_s = office_date_from.strftime("%Y/%m/%d")
-                date_t_s = office_date_to.strftime("%Y/%m/%d")
-                ok, msg, rows = fetch_ledger_rows(sid, sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=False, delivery_date_from=date_f_s, delivery_date_to=date_t_s, st_secrets=secrets_obj_office)
-                if ok:
-                    st.session_state.office_zero_unit_rows = rows
-                    st.success(msg)
-                    st.rerun()
+                    with st.status("データを取得中...", expanded=True) as status:
+                        st.write("台帳に接続しています...")
+                        ok, msg, rows = fetch_ledger_rows(
+                            sid, 
+                            sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", 
+                            only_unconfirmed=False, 
+                            only_confirmed=False, 
+                            only_zero_unit_price=True, 
+                            st_secrets=secrets_obj_office
+                        )
+                        if ok:
+                            st.session_state.office_zero_unit_rows = rows
+                            status.update(label="✅ 取得完了！", state="complete", expanded=False)
+                            st.toast(f"✅ {len(rows)}件の単価未入力行を取得しました", icon="✅")
+                            st.rerun()
+                        else:
+                            status.update(label="❌ エラー発生", state="error", expanded=False)
+                            st.error(msg)
+        
+        with fetch_col2:
+            if st.button("📅 日付範囲で行を取得", type="primary", key="office_fetch_by_date_btn", use_container_width=True):
+                sid = (ledger_id_office or "").strip()
+                if not sid:
+                    st.warning("スプレッドシートIDを入力してください。")
                 else:
-                    st.error(msg)
-            else:
-                st.warning("スプレッドシートIDを入力してください。")
-
-    if st.session_state.get("office_zero_unit_rows"):
-        rows_raw = st.session_state.office_zero_unit_rows
-        stores_master = load_stores()
-        spec_master = load_item_spec_master()
-        items_master = sorted(set((r.get("品目") or "").strip() for r in spec_master if (r.get("品目") or "").strip()))
-        stores_options = ["（すべて）"] + stores_master
-        items_options = ["（すべて）"] + items_master
-
-        # 品目名「胡瓜バラ」等は台帳では 品目=胡瓜・規格=バラ と分けて保存されていることがあるため、その組み合わせでもマッチさせる
-        def _item_spec_for_composite(selected_item: str):
-            if not selected_item or selected_item == "（すべて）":
-                return None
-            s = selected_item.strip()
-            # 胡瓜: 胡瓜バラ→(胡瓜,バラ), 胡瓜平箱→(胡瓜,平箱)
-            # 長ネギ: 長ねぎバラ/長ネギバラ→(長ネギ,バラ)。春菊・青梗菜は単品のみなので不要
-            _map = {
-                "胡瓜バラ": ("胡瓜", "バラ"),
-                "胡瓜平箱": ("胡瓜", "平箱"),
-                "長ねぎバラ": ("長ネギ", "バラ"),
-                "長ネギバラ": ("長ネギ", "バラ"),
-            }
-            return _map.get(s)
-
-        def _norm_d(s):
-            if s is None or s == "": return ""
-            return str(s).strip().replace("-", "/")
-
-        st.subheader("絞り込み")
-        st.caption("日付範囲は上で指定した「納品日付（から／まで）」で絞り込んでいます。変更する場合は上で日付を変えてください。")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.write("日付: " + office_date_from.strftime("%Y-%m-%d") + " ～ " + office_date_to.strftime("%Y-%m-%d"))
-        with c2:
-            filter_store = st.selectbox("納品先", options=stores_options, key="office_filter_store")
-        with c3:
-            filter_item = st.selectbox("品目", options=items_options, key="office_filter_item")
-
-        date_from_s = _norm_d(office_date_from.strftime("%Y-%m-%d"))
-        date_to_s = _norm_d(office_date_to.strftime("%Y-%m-%d"))
-        # 日付・納品先・品目で絞った行から規格の選択肢を生成（データに存在する規格だけ表示）
-        filtered_by_date_store_item = []
-        composite = _item_spec_for_composite(filter_item)
-        for r in rows_raw:
-            d = _norm_d(r.get("納品日付", ""))
-            if date_from_s and d < date_from_s:
-                continue
-            if date_to_s and d > date_to_s:
-                continue
-            store = (r.get("納品先") or "").strip()
-            if filter_store and filter_store != "（すべて）" and store != filter_store:
-                continue
-            item = (r.get("品目") or "").strip()
-            spec = (r.get("規格") or "").strip()
-            if filter_item and filter_item != "（すべて）":
-                if composite:
-                    base_item, base_spec = composite
-                    if not ((item == base_item and spec == base_spec) or item == filter_item):
-                        continue
-                elif item != filter_item:
+                    with st.status("データを取得中...", expanded=True) as status:
+                        st.write(f"{office_date_from.strftime('%Y/%m/%d')} ～ {office_date_to.strftime('%Y/%m/%d')} のデータを取得中...")
+                        date_f_s = office_date_from.strftime("%Y/%m/%d")
+                        date_t_s = office_date_to.strftime("%Y/%m/%d")
+                        ok, msg, rows = fetch_ledger_rows(
+                            sid, 
+                            sheet_name=(ledger_sheet_office or "台帳データ").strip() or "台帳データ", 
+                            only_unconfirmed=False, 
+                            only_confirmed=False, 
+                            only_zero_unit_price=False, 
+                            delivery_date_from=date_f_s, 
+                            delivery_date_to=date_t_s, 
+                            st_secrets=secrets_obj_office
+                        )
+                        if ok:
+                            st.session_state.office_zero_unit_rows = rows
+                            status.update(label="✅ 取得完了！", state="complete", expanded=False)
+                            st.toast(f"✅ {len(rows)}件のデータを取得しました", icon="✅")
+                            st.rerun()
+                        else:
+                            status.update(label="❌ エラー発生", state="error", expanded=False)
+                            st.error(msg)
+        
+        # データが取得されている場合: 絞り込みUI
+        if st.session_state.get("office_zero_unit_rows"):
+            rows_raw = st.session_state.office_zero_unit_rows
+            st.markdown("---")
+            st.subheader("🎯 絞り込み条件")
+            st.info(f"📊 現在 **{len(rows_raw)}件** のデータが読み込まれています。")
+            
+            stores_master = load_stores()
+            spec_master = load_item_spec_master()
+            items_master = sorted(set((r.get("品目") or "").strip() for r in spec_master if (r.get("品目") or "").strip()))
+            stores_options = ["（すべて）"] + stores_master
+            items_options = ["（すべて）"] + items_master
+            
+            # 品目名「胡瓜バラ」等は台帳では 品目=胡瓜・規格=バラ と分けて保存されていることがあるため、その組み合わせでもマッチさせる
+            def _item_spec_for_composite(selected_item: str):
+                if not selected_item or selected_item == "（すべて）":
+                    return None
+                s = selected_item.strip()
+                _map = {
+                    "胡瓜バラ": ("胡瓜", "バラ"),
+                    "胡瓜平箱": ("胡瓜", "平箱"),
+                    "長ねぎバラ": ("長ネギ", "バラ"),
+                    "長ネギバラ": ("長ネギ", "バラ"),
+                }
+                return _map.get(s)
+            
+            def _norm_d(s):
+                if s is None or s == "": return ""
+                return str(s).strip().replace("-", "/")
+            
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+            with filter_col1:
+                filter_store = st.selectbox("🏪 納品先", options=stores_options, key="office_filter_store")
+            with filter_col2:
+                filter_item = st.selectbox("🥬 品目", options=items_options, key="office_filter_item")
+            
+            date_from_s = _norm_d(office_date_from.strftime("%Y-%m-%d"))
+            date_to_s = _norm_d(office_date_to.strftime("%Y-%m-%d"))
+            
+            # 日付・納品先・品目で絞る
+            filtered_by_date_store_item = []
+            composite = _item_spec_for_composite(filter_item)
+            for r in rows_raw:
+                d = _norm_d(r.get("納品日付", ""))
+                if date_from_s and d < date_from_s:
                     continue
-            filtered_by_date_store_item.append(r)
-        specs_in_data = sorted(set((r.get("規格") or "").strip() for r in filtered_by_date_store_item))
-        specs_options = ["（すべて）"] + [s if s else "（規格なし）" for s in specs_in_data]
-        with c4:
-            filter_spec = st.selectbox("規格", options=specs_options, key="office_filter_spec")
-
-        filtered = []
-        for r in filtered_by_date_store_item:
-            spec = (r.get("規格") or "").strip()
-            spec_display = spec if spec else "（規格なし）"
-            if filter_spec and filter_spec != "（すべて）" and spec_display != filter_spec:
-                continue
-            filtered.append(r)
-
-        if not filtered:
-            st.info("条件に合う行がありません。")
-            st.stop()
-
-        # 選択列を追加（一括適用用）
-        for i, r in enumerate(filtered):
-            if "選択" not in r:
-                r["選択"] = False
-        df_office = pd.DataFrame(filtered)
-        if "選択" not in df_office.columns:
-            df_office["選択"] = False
-        # 一括選択ボタンが押された場合: ソースデータとdfの両方で選択=Trueにし、data_editorのキーを変えて新規描画させる
-        if st.session_state.get("office_select_all"):
-            for r in filtered:
-                r["選択"] = True
-            df_office["選択"] = True
-            del st.session_state["office_select_all"]
-            if "office_data_editor" in st.session_state:
-                del st.session_state["office_data_editor"]
-            st.session_state["office_data_editor_key_suffix"] = (st.session_state.get("office_data_editor_key_suffix", 0) + 1) % 100000
-
-        sheet_display = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
-        sid_display = (ledger_id_office or "").strip()
-        sid_short = (sid_display[:12] + "…") if len(sid_display) > 12 else sid_display
-        st.subheader("対象データ（編集・チェック後は下の一括適用を利用）")
-        st.info(f"**適用先シート**: スプレッドシート ID `{sid_short}` の **「{sheet_display}」** に一括適用されます。（上で取得時に指定したID・シート名です）")
-        if st.button("すべて選択", help="表示中の対象データをすべて選択します（選択列にチェックを入れます）", key="office_select_all_btn"):
-            st.session_state.office_select_all = True
-            st.rerun()
-        col_config_office = {}
-        for col in df_office.columns:
-            if col == "選択":
-                col_config_office[col] = st.column_config.CheckboxColumn("選択", help="一括適用する行にチェック（「すべて選択」ボタンで全行にチェック）")
-            elif col == "納品単価":
-                col_config_office[col] = st.column_config.NumberColumn("納品単価", min_value=0, step=1)
-            elif col == "納品金額":
-                col_config_office[col] = st.column_config.NumberColumn("納品金額", min_value=0, step=1)
-            elif col == "数量":
-                col_config_office[col] = st.column_config.NumberColumn("数量", min_value=0, step=1)
+                if date_to_s and d > date_to_s:
+                    continue
+                store = (r.get("納品先") or "").strip()
+                if filter_store and filter_store != "（すべて）" and store != filter_store:
+                    continue
+                item = (r.get("品目") or "").strip()
+                spec = (r.get("規格") or "").strip()
+                if filter_item and filter_item != "（すべて）":
+                    if composite:
+                        base_item, base_spec = composite
+                        if not ((item == base_item and spec == base_spec) or item == filter_item):
+                            continue
+                    elif item != filter_item:
+                        continue
+                filtered_by_date_store_item.append(r)
+            
+            specs_in_data = sorted(set((r.get("規格") or "").strip() for r in filtered_by_date_store_item))
+            specs_options = ["（すべて）"] + [s if s else "（規格なし）" for s in specs_in_data]
+            with filter_col3:
+                filter_spec = st.selectbox("📦 規格", options=specs_options, key="office_filter_spec")
+            
+            # 最終的な絞り込み
+            filtered = []
+            for r in filtered_by_date_store_item:
+                spec = (r.get("規格") or "").strip()
+                spec_display = spec if spec else "（規格なし）"
+                if filter_spec and filter_spec != "（すべて）" and spec_display != filter_spec:
+                    continue
+                filtered.append(r)
+            
+            if filtered:
+                st.success(f"✅ 絞り込み結果: **{len(filtered)}件** が対象です。次のタブ「② 単価入力・編集」に進んでください。")
+                # session_state に保存（Tab 2 で使用）
+                st.session_state.office_filtered_rows = filtered
             else:
-                col_config_office[col] = st.column_config.TextColumn(col)
-        editor_key = "office_data_editor_" + str(st.session_state.get("office_data_editor_key_suffix", 0))
-        edited_office_df = st.data_editor(df_office, width="stretch", hide_index=True, column_config=col_config_office, key=editor_key)
-
-        st.subheader("一括更新")
-        st.caption(f"適用先: シート「{sheet_display}」（スプレッドシート ID: {sid_short}）")
-        apply_price = st.number_input("適用する単価", min_value=0, value=0, step=1, key="office_apply_price")
-        apply_to_all = st.checkbox("表示中の全行に適用する（選択列のチェックを無視）", value=False, key="office_apply_to_all")
-        if st.button("選択した行に一括適用", type="primary", key="office_apply_btn"):
-            if apply_price <= 0:
-                st.warning("適用する単価を1以上で入力してください。")
-            else:
-                selected_ids = []
-                for idx, row in edited_office_df.iterrows():
-                    if apply_to_all:
-                        did = row.get("納品ID")
-                        if did:
-                            selected_ids.append((str(did).strip(), row))
-                    else:
-                        ch = row.get("選択")
-                        if ch is True or (isinstance(ch, str) and str(ch).strip().lower() in ("true", "1", "yes")):
+                st.warning("条件に合う行がありません。絞り込み条件を変更してください。")
+                st.session_state.office_filtered_rows = []
+        else:
+            st.info("👆 上のボタンからデータを取得してください。")
+    
+    # ===== Tab 2: 単価入力・編集 =====
+    with office_tab2:
+        if not st.session_state.get("office_filtered_rows"):
+            st.info("👈 まず「① データの検索・絞り込み」タブでデータを取得・絞り込んでください。")
+        else:
+            filtered = st.session_state.office_filtered_rows
+            st.subheader("✏️ 単価入力・編集（Excel感覚で連続入力できます）")
+            
+            # 選択列を追加
+            for i, r in enumerate(filtered):
+                if "選択" not in r:
+                    r["選択"] = False
+            
+            df_office = pd.DataFrame(filtered)
+            if "選択" not in df_office.columns:
+                df_office["選択"] = False
+            
+            # 一括選択ボタン処理
+            if st.session_state.get("office_select_all"):
+                for r in filtered:
+                    r["選択"] = True
+                df_office["選択"] = True
+                del st.session_state["office_select_all"]
+                if "office_data_editor" in st.session_state:
+                    del st.session_state["office_data_editor"]
+                st.session_state["office_data_editor_key_suffix"] = (st.session_state.get("office_data_editor_key_suffix", 0) + 1) % 100000
+            
+            # 単価の状態を集計（色分けの参考情報）
+            total_rows = len(df_office)
+            zero_price_count = len(df_office[((df_office["納品単価"].isna()) | (df_office["納品単価"] == 0))])
+            filled_price_count = total_rows - zero_price_count
+            
+            status_col1, status_col2, status_col3 = st.columns(3)
+            with status_col1:
+                st.metric("📊 対象データ", f"{total_rows} 件")
+            with status_col2:
+                st.metric("❌ 単価未入力", f"{zero_price_count} 件", delta=None if zero_price_count == 0 else f"-{zero_price_count}")
+            with status_col3:
+                st.metric("✅ 単価入力済み", f"{filled_price_count} 件", delta=None if filled_price_count == 0 else f"+{filled_price_count}")
+            
+            st.markdown("---")
+            
+            # すべて選択ボタン
+            btn_col1, btn_col2 = st.columns([1, 3])
+            with btn_col1:
+                if st.button("☑️ すべて選択", help="表示中のデータをすべて選択します", key="office_select_all_btn", use_container_width=True):
+                    st.session_state.office_select_all = True
+                    st.rerun()
+            with btn_col2:
+                sheet_display = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
+                sid_display = (ledger_id_office or "").strip()
+                sid_short = (sid_display[:12] + "…") if len(sid_display) > 12 else sid_display
+                st.info(f"**適用先**: スプレッドシート `{sid_short}` の「**{sheet_display}**」シート")
+            
+            # data_editor の列設定
+            col_config_office = {}
+            for col in df_office.columns:
+                if col == "選択":
+                    col_config_office[col] = st.column_config.CheckboxColumn("選択", help="一括適用する行にチェック")
+                elif col == "納品単価":
+                    col_config_office[col] = st.column_config.NumberColumn("💰 納品単価", min_value=0, step=1, format="%d 円")
+                elif col == "納品金額":
+                    col_config_office[col] = st.column_config.NumberColumn("💵 納品金額", min_value=0, step=1, format="%d 円")
+                elif col == "数量":
+                    col_config_office[col] = st.column_config.NumberColumn("📦 数量", min_value=0, step=1)
+                else:
+                    col_config_office[col] = st.column_config.TextColumn(col)
+            
+            # data_editor 表示（行の色分けヒントを caption で案内）
+            st.caption("💡 **操作ヒント**: セルをクリックして数値を入力し、Tab/Enter で次のセルに移動できます。単価が0または空の行は赤色、入力済みは通常色で表示されます。")
+            
+            editor_key = "office_data_editor_" + str(st.session_state.get("office_data_editor_key_suffix", 0))
+            
+            # 行の色分けスタイリング用に、単価が0/空の行を検出してマーキング
+            def highlight_zero_price(row):
+                price = row.get("納品単価")
+                if pd.isna(price) or price == 0:
+                    return ['background-color: #FFEBEE'] * len(row)  # 赤系背景
+                else:
+                    return ['background-color: white'] * len(row)  # 通常色
+            
+            # styled_df = df_office.style.apply(highlight_zero_price, axis=1)
+            # Note: st.data_editor doesn't support styled DataFrames directly, so we'll use a workaround with column_config and visual cues
+            
+            edited_office_df = st.data_editor(
+                df_office, 
+                width="stretch", 
+                hide_index=True, 
+                column_config=col_config_office, 
+                key=editor_key,
+                num_rows="fixed"
+            )
+            
+            # 編集したデータを session_state に保存
+            st.session_state.office_edited_df = edited_office_df
+            
+            st.success("✅ 編集が完了したら、次のタブ「③ 集計・確認」で一括適用してください。")
+    
+    # ===== Tab 3: 集計・確認 =====
+    with office_tab3:
+        if not st.session_state.get("office_edited_df") is None and len(st.session_state.office_edited_df) > 0:
+            edited_office_df = st.session_state.office_edited_df
+            st.subheader("📈 集計・確認")
+            
+            # 単価の統計情報
+            total_rows = len(edited_office_df)
+            zero_price_rows = edited_office_df[((edited_office_df["納品単価"].isna()) | (edited_office_df["納品単価"] == 0))]
+            filled_price_rows = edited_office_df[~((edited_office_df["納品単価"].isna()) | (edited_office_df["納品単価"] == 0))]
+            
+            summary_col1, summary_col2, summary_col3 = st.columns(3)
+            with summary_col1:
+                st.metric("📊 全体", f"{total_rows} 件")
+            with summary_col2:
+                st.metric("❌ 未入力", f"{len(zero_price_rows)} 件")
+            with summary_col3:
+                st.metric("✅ 入力済み", f"{len(filled_price_rows)} 件")
+            
+            # 選択行の集計
+            selected_rows = edited_office_df[edited_office_df["選択"] == True]
+            if len(selected_rows) > 0:
+                st.info(f"✅ **{len(selected_rows)}件** が選択されています。")
+            
+            st.markdown("---")
+            st.subheader("💰 一括更新")
+            
+            apply_col1, apply_col2 = st.columns([1, 2])
+            with apply_col1:
+                apply_price = st.number_input("適用する単価（円）", min_value=0, value=0, step=10, key="office_apply_price")
+            with apply_col2:
+                apply_to_all = st.checkbox("表示中の全行に適用する（選択列のチェックを無視）", value=False, key="office_apply_to_all")
+            
+            sheet_display = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
+            sid_display = (ledger_id_office or "").strip()
+            st.caption(f"適用先: **{sheet_display}** シート")
+            
+            if st.button("🚀 選択した行に一括適用", type="primary", key="office_apply_btn", use_container_width=True):
+                if apply_price <= 0:
+                    st.warning("⚠️ 適用する単価を1以上で入力してください。")
+                else:
+                    selected_ids = []
+                    for idx, row in edited_office_df.iterrows():
+                        if apply_to_all:
                             did = row.get("納品ID")
                             if did:
                                 selected_ids.append((str(did).strip(), row))
-                if not selected_ids:
-                    st.warning("一括適用する行にチェックを入れるか、「表示中の全行に適用する」にチェックを入れてください。")
-                else:
-                    sid = (ledger_id_office or "").strip()
-                    sheet_s = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
-                    updates_list = []
-                    for did, row in selected_ids:
-                        try:
-                            qty = int(float(str(row.get("数量", 0)).replace(",", ""))) if row.get("数量") is not None else 0
-                        except (ValueError, TypeError):
-                            qty = 0
-                        amount = apply_price * qty
-                        updates_list.append({"納品ID": did, "納品単価": apply_price, "納品金額": amount})
-                    ok, msg, ok_count = update_ledger_rows_unit_price_bulk(sid, sheet_s, updates_list, st_secrets=secrets_obj_office)
-                    if ok and ok_count > 0:
-                        st.success(f"✅ {ok_count}件を更新しました。（納品金額＝単価×数量で再計算）")
-                        ok2, _, new_rows = fetch_ledger_rows(sid, sheet_name=sheet_s, only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
-                        if ok2:
-                            st.session_state.office_zero_unit_rows = new_rows
-                        st.rerun()
-                    elif not ok:
-                        st.error(msg)
+                        else:
+                            ch = row.get("選択")
+                            if ch is True or (isinstance(ch, str) and str(ch).strip().lower() in ("true", "1", "yes")):
+                                did = row.get("納品ID")
+                                if did:
+                                    selected_ids.append((str(did).strip(), row))
+                    
+                    if not selected_ids:
+                        st.warning("⚠️ 一括適用する行にチェックを入れるか、「表示中の全行に適用する」にチェックを入れてください。")
+                    else:
+                        with st.status("スプレッドシートを更新中...", expanded=True) as status:
+                            st.write(f"{len(selected_ids)}件のデータを更新しています...")
+                            sid = (ledger_id_office or "").strip()
+                            sheet_s = (ledger_sheet_office or "台帳データ").strip() or "台帳データ"
+                            updates_list = []
+                            for did, row in selected_ids:
+                                try:
+                                    qty = int(float(str(row.get("数量", 0)).replace(",", ""))) if row.get("数量") is not None else 0
+                                except (ValueError, TypeError):
+                                    qty = 0
+                                amount = apply_price * qty
+                                updates_list.append({"納品ID": did, "納品単価": apply_price, "納品金額": amount})
+                            
+                            ok, msg, ok_count = update_ledger_rows_unit_price_bulk(sid, sheet_s, updates_list, st_secrets=secrets_obj_office)
+                            
+                            if ok and ok_count > 0:
+                                status.update(label="✅ 更新完了！", state="complete", expanded=False)
+                                st.success(f"✅ **{ok_count}件** を更新しました。（納品金額＝単価×数量で再計算）")
+                                st.toast(f"🎉 {ok_count}件の単価を更新しました！", icon="🎉")
+                                st.balloons()
+                                
+                                # データを再取得
+                                ok2, _, new_rows = fetch_ledger_rows(sid, sheet_name=sheet_s, only_unconfirmed=False, only_confirmed=False, only_zero_unit_price=True, st_secrets=secrets_obj_office)
+                                if ok2:
+                                    st.session_state.office_zero_unit_rows = new_rows
+                                st.rerun()
+                            elif not ok:
+                                status.update(label="❌ エラー発生", state="error", expanded=False)
+                                st.error(f"❌ {msg}")
+                                st.toast("❌ 更新に失敗しました", icon="❌")
+        else:
+            st.info("👈 「② 単価入力・編集」タブでデータを編集してください。")
+    
     st.stop()
 
 # 現場用：出荷業務
@@ -1158,9 +1491,10 @@ def _render_parsed_data_editor():
         item_setting_boxes = _get_setting_from_lookup(normalized_item or item_name, spec_s)
         receive_as_boxes = bool(item_setting_boxes.get("receive_as_boxes", False))
         if effective_unit > 0 and unit > 0 and unit < effective_unit and boxes == 0 and remainder == 0:
+            # unit に総数が入っていた場合: 箱数＝総数÷入数 の商、端数＝余りで再計算
+            total_as_count = safe_int(entry.get('unit', 0))
             unit = effective_unit
-            boxes = safe_int(entry.get('unit', 0))
-            remainder = 0
+            boxes, remainder = total_to_boxes_remainder(total_as_count, unit)
         elif receive_as_boxes and effective_unit > 0 and unit == effective_unit and boxes == 0 and 0 < remainder < effective_unit:
             boxes = remainder
             remainder = 0

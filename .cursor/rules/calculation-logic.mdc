@@ -1,0 +1,24 @@
+---
+description: 箱数・端数・合計数量の計算は box_remainder_calc を使い、直書きの割り算を禁止する
+globs: ["**/order_processing.py", "**/delivery_converter.py", "**/app.py", "**/box_remainder_calc.py"]
+alwaysApply: false
+---
+
+# 計算ロジック（箱数・端数・合計数量）のルール
+
+**箱数(boxes)・端数(remainder)・合計数量(total)・入数(unit)** の計算を変更・追加するときは、以下を守ること。
+
+1. **唯一の実装**: 割り算（箱数＝総数÷入数の商、端数＝余り）は **`box_remainder_calc` モジュール** にのみ実装する。
+   - `total_to_boxes_remainder(total, unit)` → (boxes, remainder)
+   - `boxes_remainder_to_total(unit, boxes, remainder)` → total
+
+2. **直書き禁止**: 他ファイルで `total // unit` や `total % unit`、`qty // unit`、`qty % unit` を**新たに書かない**。既存の計算も `box_remainder_calc` の関数呼び出しに統一すること。
+
+3. **不変条件**: 入数 > 0 のとき常に  
+   - `合計数量 = 入数 × 箱数 + 端数`  
+   - `0 ≤ 端数 < 入数`  
+   が成り立つようにする。
+
+4. **参照**: 定義・対策一覧は **`docs/計算ロジックと品質保証.md`** を参照する。変更時は `tests/test_box_remainder_calc.py` のテストが通ることを確認する。
+
+5. **例外ロジック**: 「unit に総数が入っていた」補正や「箱数で受信」の解釈など、特別な分岐には**なぜその変換をするか**をコメントで明記する。計算式自体は `total_to_boxes_remainder` を使う。
