@@ -96,9 +96,10 @@ def _fix_boxes_remainder_when_count_misread_as_boxes(entries: list) -> None:
 
 def _fix_total_when_ai_sent_boxes_times_unit(entries: list) -> None:
     """
-    AIが「×」の後の数字を箱数と誤解し、total=箱数×入数 で返した場合に補正する。
-    例：胡瓜3本×150 → 正しくは total=150, 箱数=5, 端数=0。AIが total=4500(150*30) と返したら total=150 に直す。
-    条件: receive_as_boxes でない かつ total == unit * boxes かつ boxes が 10 以上（×の後が箱数と誤解されやすい値）
+    AIが「×」の後の数字を箱数と誤解し、total=箱数×入数 で返した場合にのみ補正する。
+    例：胡瓜3本×150 → 正しくは total=150。AIが total=4500(150*30) と返したら total=150 に直す。
+    注意: total=300(箱数10×入数30) や total=500(箱数10×入数50) は正しい値なので補正しない。
+    条件: total > 1000 かつ total == unit * boxes かつ boxes が 10～1000 のときだけ補正（total が明らかに大きい場合のみ）。
     """
     for entry in entries:
         if not isinstance(entry, dict):
@@ -115,8 +116,8 @@ def _fix_total_when_ai_sent_boxes_times_unit(entries: list) -> None:
         setting = get_item_setting(normalized_item or item, spec)
         if setting.get("receive_as_boxes", False):
             continue
-        # total が 箱数×入数 になっている（＝×の後を箱数と誤解した）可能性: total == unit * boxes かつ boxes が「×の後」としてあり得る範囲
-        if total == unit * boxes and boxes >= 10 and boxes <= 1000:
+        # total が 箱数×入数 の誤りと判断できるのは「total が 1000 を超える」場合のみ。300・500 などは正しい合計なので触らない
+        if total > 1000 and total == unit * boxes and 10 <= boxes <= 1000:
             entry["total"] = boxes
             entry["boxes"], entry["remainder"] = total_to_boxes_remainder(boxes, unit)
 

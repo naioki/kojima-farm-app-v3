@@ -124,3 +124,33 @@ def test_fix_total_when_ai_sent_boxes_times_unit(mock_get_setting, mock_norm):
     assert entries[0]["boxes"] == 5
     assert entries[0]["remainder"] == 0
 
+
+@patch('order_processing.normalize_item_name')
+@patch('order_processing.get_item_setting')
+def test_fix_total_does_not_correct_valid_total_300(mock_get_setting, mock_norm):
+    """八柱 胡瓜3本×300: total=300, 箱数=10, 端数=0 は正しいので補正しない（total>1000 でないため）"""
+    mock_norm.return_value = "胡瓜"
+    mock_get_setting.return_value = {"default_unit": 30, "receive_as_boxes": False}
+    entries = [
+        {"store": "八柱", "item": "胡瓜", "spec": "3本", "unit": 30, "total": 300, "boxes": 10, "remainder": 0}
+    ]
+    _fix_total_when_ai_sent_boxes_times_unit(entries)
+    assert entries[0]["total"] == 300
+    assert entries[0]["boxes"] == 10
+    assert entries[0]["remainder"] == 0
+
+
+@patch('order_processing.normalize_item_name')
+@patch('order_processing.get_item_setting')
+def test_fix_total_does_not_correct_valid_total_500(mock_get_setting, mock_norm):
+    """青葉台 ネギバラ×500: total=500, 箱数=10, 端数=0 は正しいので補正しない"""
+    mock_norm.return_value = "長ネギ"
+    mock_get_setting.return_value = {"default_unit": 50, "receive_as_boxes": False}
+    entries = [
+        {"store": "青葉台", "item": "長ネギ", "spec": "バラ", "unit": 50, "total": 500, "boxes": 10, "remainder": 0}
+    ]
+    _fix_total_when_ai_sent_boxes_times_unit(entries)
+    assert entries[0]["total"] == 500
+    assert entries[0]["boxes"] == 10
+    assert entries[0]["remainder"] == 0
+
