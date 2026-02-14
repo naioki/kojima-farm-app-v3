@@ -173,20 +173,17 @@ def validate_store_name(store_name, auto_learn=True):
 
 def parse_order_image(image: Image.Image, api_key: str) -> list:
     genai.configure(api_key=api_key)
-    # 優先: gemini-1.5-flash（画像対応・利用可能）。不可なら順にフォールバック。
+    # 2.5 は利用上限のため使用しない。2.0-flash → 1.5-flash → 1.5-pro の順で試す。
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash')
         except Exception:
             try:
-                model = genai.GenerativeModel('gemini-2.0-flash')
+                model = genai.GenerativeModel('gemini-1.5-pro')
             except Exception:
-                try:
-                    model = genai.GenerativeModel('gemini-1.5-pro')
-                except Exception:
-                    model = genai.GenerativeModel('gemini-pro-vision')
+                model = genai.GenerativeModel('gemini-pro-vision')
     known_stores = get_known_stores()
     item_normalization = get_item_normalization()
     store_list = "、".join(known_stores)
@@ -263,12 +260,12 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list:
     """メール本文（テキスト）を解析して注文データを抽出"""
     genai.configure(api_key=api_key)
-    # 優先: gemini-1.5-flash。不可ならフォールバック。
+    # 2.5 は利用上限のため使用しない。2.0-flash → 1.5-flash → gemini-pro。
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash')
         except Exception:
             model = genai.GenerativeModel('gemini-pro')
             
