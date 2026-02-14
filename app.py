@@ -1111,7 +1111,7 @@ def _render_parsed_data_editor():
     st.markdown("---")
     st.header("📊 解析結果の確認・編集")
     st.write("以下のテーブルでデータを確認・編集できます。規格を変更すると入数・合計数量が再計算されます。編集後は「ラベルを生成」ボタンを押してください。")
-    st.caption("品目・規格は一覧から選択できます（マスタ＋表の既存値）。入数は数値で直接入力できます。新しい品目は「設定管理」の品目名管理で追加してください。")
+    st.caption("品目・規格は一覧から選択できます（マスタ＋表の既存値）。入数・箱数・端数は入力と同時に保存され、合計数量は自動計算されます。マスタ未登録の行も編集できます。")
     # マスタを1回だけ読み込み（3秒キャッシュで編集時の再読み込みを削減）
     _spec_master, _item_settings, _stores_list = _cached_editor_config()
     # (品目, 規格) -> 設定 のルックアップ（get_item_setting 相当をメモリ上で実行）
@@ -1169,6 +1169,7 @@ def _render_parsed_data_editor():
                 known = [s for s in known if s and str(s).strip()]
                 if len(known) == 1:
                     spec_s = str(known[0]).strip()
+        # 保存済みの入数・箱数・端数を優先（マスタ未登録・ユーザー編集を保持）。未設定時のみマスタで補う。
         unit = safe_int(entry.get('unit', 0))
         boxes = safe_int(entry.get('boxes', 0))
         remainder = safe_int(entry.get('remainder', 0))
@@ -1184,8 +1185,7 @@ def _render_parsed_data_editor():
             remainder = 0
         if unit == 0 and effective_unit > 0:
             unit = effective_unit
-        if effective_unit > 0:
-            unit = effective_unit
+        # ユーザーが入力した入数は上書きしない（マスタは未入力時のみ使用）
         total_quantity = (unit * boxes) + remainder
         df_data.append({'店舗名': entry.get('store', ''), '品目': entry.get('item', ''), '規格': spec_s, '入数(unit)': unit, '箱数(boxes)': boxes, '端数(remainder)': remainder, '合計数量': total_quantity})
     df = pd.DataFrame(df_data)
@@ -1238,31 +1238,28 @@ def _render_parsed_data_editor():
     b = edited_df['箱数(boxes)'].fillna(0)
     r = edited_df['端数(remainder)'].fillna(0)
     edited_df['合計数量'] = (u * b + r).astype(int)
-    df_for_compare = df.drop(columns=['合計数量'])
-    edited_df_for_compare = edited_df.drop(columns=['合計数量'])
-    if not df_for_compare.equals(edited_df_for_compare):
-        updated_data = []
-        for _, row in edited_df.iterrows():
-            normalized_item = normalize_item_name(row.get('品目', '') or '')
-            validated_store = validate_store_name(row.get('店舗名', '') or '') or (row.get('店舗名', '') or '')
-            try:
-                spec_value = row.get('規格')
-                if pd.isna(spec_value) or spec_value is None:
-                    spec_value = ''
-                else:
-                    spec_value = str(spec_value).strip()
-                if spec_value.lower() in ('none', 'nan'):
-                    spec_value = ''
-            except (KeyError, TypeError):
+    # 入力された瞬間に session_state を更新（フォーカスが外れても値が戻らないようにする）。マスタ未登録行も編集を保持。
+    updated_data = []
+    for _, row in edited_df.iterrows():
+        normalized_item = normalize_item_name(row.get('品目', '') or '')
+        validated_store = validate_store_name(row.get('店舗名', '') or '') or (row.get('店舗名', '') or '')
+        try:
+            spec_value = row.get('規格')
+            if pd.isna(spec_value) or spec_value is None:
                 spec_value = ''
-            unit_val = safe_int(row.get('入数(unit)', 0))
-            boxes_val = safe_int(row.get('箱数(boxes)', 0))
-            remainder_val = safe_int(row.get('端数(remainder)', 0))
-            if unit_val > 0:
-                set_unit(normalized_item or (row.get('品目') or ''), spec_value, validated_store, unit_val)
-            updated_data.append({'store': validated_store, 'item': normalized_item, 'spec': spec_value, 'unit': unit_val, 'boxes': boxes_val, 'remainder': remainder_val})
-        st.session_state.parsed_data = updated_data
-        st.info("✅ データを更新しました。PDFを生成する場合は下のボタンを押してください。")
+            else:
+                spec_value = str(spec_value).strip()
+            if spec_value.lower() in ('none', 'nan'):
+                spec_value = ''
+        except (KeyError, TypeError):
+            spec_value = ''
+        unit_val = safe_int(row.get('入数(unit)', 0))
+        boxes_val = safe_int(row.get('箱数(boxes)', 0))
+        remainder_val = safe_int(row.get('端数(remainder)', 0))
+        if unit_val > 0:
+            set_unit(normalized_item or (row.get('品目') or ''), spec_value, validated_store, unit_val)
+        updated_data.append({'store': validated_store, 'item': normalized_item, 'spec': spec_value, 'unit': unit_val, 'boxes': boxes_val, 'remainder': remainder_val})
+    st.session_state.parsed_data = updated_data
     # バリデーション: 最小出荷単位・規格マスタ不一致（品目が空の行はスキップ）
     validation_errors = []
     for idx, row in edited_df.iterrows():

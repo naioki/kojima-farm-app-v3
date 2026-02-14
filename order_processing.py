@@ -95,6 +95,7 @@ def normalize_spec_from_parse(spec_str: str) -> str:
     - ばら / バラ → バラ
     - 平箱 → 平箱
     - N本（数字+本）→ そのまま（3本, 2本, 50本など）
+    - 2-3株 → 2~3株（マスタ表記に統一）
     - 上記以外は前後空白を取って返す
     """
     if spec_str is None:
@@ -110,6 +111,9 @@ def normalize_spec_from_parse(spec_str: str) -> str:
     # 数字+本（2本, 3本, 50本など）はそのまま
     if re.match(r"^\d+本$", s):
         return s
+    # 青梗菜の規格表記ゆれ（2-3株 → 2~3株）
+    if s in ("2-3株", "2‐3株", "2ー3株"):
+        return "2~3株"
     return s
 
 
@@ -218,9 +222,9 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 {spec_master_section}
 【ルール】1) 店舗名の「:」以降はその店舗の注文 2) 品目なし行は直前の品目の続き 3) 「/」区切りは同店舗・同品目で統合 4) 胡瓜バラと胡瓜3本は別規格 5) unit/totalは数字のみ（箱数・端数は出力しない）
 【入数】{unit_lines}
-【total】「×」の後を合計に。50×4→200。箱数で受信の品目（{box_count_str}）は「×」後を箱数とし total=箱数×入数。
+【total】「×」の後を合計に。50×4→200。箱数で受信の品目（{box_count_str}）は「×」後を箱数とし total=箱数×入数（例：胡瓜平箱×1→1箱、total=50）。春菊・青梗菜は規格が1つのため省略される。「春菊×20」→spec=1束・unit=30・total=20×30=600。「青梗菜×15」→spec=2~3株・unit=20・total=15×20=300。
 【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]
-全店舗・全品目を漏れなく。"""
+全店舗・全品目を漏れなく。長ネギ2本は入数30で計算すること。"""
     try:
         response = _generate_content_with_retry(model, [prompt, image])
         text = response.text.strip()
@@ -276,7 +280,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
 【品目正規化】{norm_json}
 {spec_master_section}
 【入数】{unit_lines}
-【total】「×」の後を合計。50×4→200。箱数で受信（{box_count_str}）は「×」後を箱数とし total=箱数×入数。unit/totalは数字のみ。日付は出力しない。
+【total】「×」の後を合計。50×4→200。箱数で受信（{box_count_str}）は「×」後を箱数とし total=箱数×入数（胡瓜平箱×1→total=50）。春菊・青梗菜は規格省略可。「春菊×20」→spec=1束,unit=30,total=600。「青梗菜×15」→spec=2~3株,unit=20,total=300。長ネギ2本はunit=30。日付は出力しない。
 【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]（Markdownなし）
 【本文】
 {text}"""
