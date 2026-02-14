@@ -193,56 +193,34 @@ def _generate_content_with_retry(model, contents, max_retries=2):
 
 def parse_order_image(image: Image.Image, api_key: str) -> list:
     genai.configure(api_key=api_key)
-    # 無料枠クォータを考慮し 1.5 系を優先（2.0/2.5 は上限になりやすい）。1.5-flash → 1.5-pro → pro-vision。
+    # コスト優先: 2.5-flash-lite（最安）→ 2.5-flash → 1.5-pro → pro-vision
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            model = genai.GenerativeModel('gemini-2.5-flash')
         except Exception:
-            model = genai.GenerativeModel('gemini-pro-vision')
+            try:
+                model = genai.GenerativeModel('gemini-1.5-pro')
+            except Exception:
+                model = genai.GenerativeModel('gemini-pro-vision')
     known_stores = get_known_stores()
     item_normalization = get_item_normalization()
     store_list = "、".join(known_stores)
     unit_lines, box_count_str, spec_master_section = _build_spec_master_prompt_sections()
-    prompt = f"""
-    画像を解析し、以下の厳密なルールに従ってJSONで返してください。
-    
-    【画像読み取りの精度・誤認識を防ぐ注意】
-    - 画像に実際に写っている文字・数字のみを読み取ってください。写っていない内容を推測や憶測で補完しないでください。
-    - 店舗名・品目名・規格・数量（数字）は、画像の表記と一致するよう一字一句確認してからJSONに反映してください。
-    - 読みにくい部分は推測で埋めず、見えている通りに読み取るか、確信が持てない場合は控えめに解釈してください。
-    
-    【店舗名リスト（参考）】
-    {store_list}
-    ※上記リストにない店舗名も読み取ってください。
-    
-    【品目名の正規化ルール】
-    {json.dumps(item_normalization, ensure_ascii=False, indent=2)}
-    
-    {spec_master_section}
-    
-    【重要ルール】
-    1. 店舗名の後に「:」または改行がある場合、その後の行は全てその店舗の注文です
-    2. 品目名がない行（例：「50×1」）は、直前の品目の続きとして処理してください
-    3. 「/」で区切られた複数の注文は、同じ店舗・同じ品目として統合してください
-    4. 「胡瓜バラ」と「胡瓜3本」は別の規格として扱ってください
-    5. unit と total には「数字のみ」を入れてください。箱数・端数は出力不要です（Python側で計算します）。
-    
-    【計算ルール（上記マスタ＝1コンテナあたりの入数）】
-    {unit_lines}
-    
-    【合計数量(total)の取り方】
-    - 合計数量：メール内の「×」の後の数字を合計数量(total)とします。※「胡瓜バラ 50×4」のように「数×数」の表記の場合は、50×4＝200 として total に入れてください。
-    - 箱数で受信する品目（{box_count_str}）のみ：「×」の後の数字を箱数とし、合計数量＝箱数×入数 として total に入れてください（例：4箱・入数30 → total=120）。
-    
-    【出力JSON形式】
-    [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"total":数字}}]
-    
-    （画像からの解析ですが、形式は同じJSONです）
-    
-    必ず全ての店舗と品目を漏れなく読み取ってください。
-    """
+    # トークン削減: 冗長表現を削り、ルール・品質は維持
+    norm_json = json.dumps(item_normalization, ensure_ascii=False)
+    prompt = f"""画像を解析し、厳密に以下のルールでJSONのみ返す。
+
+【読み取り】写っている文字・数字のみ。推測で補完しない。店舗・品目・規格・数量は表記と一致させる。読みにくい部分は見えた通りか控えめに。
+【店舗】{store_list}（リスト外も読み取る）
+【品目正規化】{norm_json}
+{spec_master_section}
+【ルール】1) 店舗名の「:」以降はその店舗の注文 2) 品目なし行は直前の品目の続き 3) 「/」区切りは同店舗・同品目で統合 4) 胡瓜バラと胡瓜3本は別規格 5) unit/totalは数字のみ（箱数・端数は出力しない）
+【入数】{unit_lines}
+【total】「×」の後を合計に。50×4→200。箱数で受信の品目（{box_count_str}）は「×」後を箱数とし total=箱数×入数。
+【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]
+全店舗・全品目を漏れなく。"""
     try:
         response = _generate_content_with_retry(model, [prompt, image])
         text = response.text.strip()
@@ -277,53 +255,31 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list:
     """メール本文（テキスト）を解析して注文データを抽出"""
     genai.configure(api_key=api_key)
-    # 無料枠クォータを考慮し 1.5 系を優先。1.5-flash → 1.5-pro → gemini-pro。
+    # コスト優先: 2.5-flash-lite → 2.5-flash → 1.5-pro → gemini-pro
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
     except Exception:
         try:
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            model = genai.GenerativeModel('gemini-2.5-flash')
         except Exception:
-            model = genai.GenerativeModel('gemini-pro')
-            
+            try:
+                model = genai.GenerativeModel('gemini-1.5-pro')
+            except Exception:
+                model = genai.GenerativeModel('gemini-pro')
     known_stores = get_known_stores()
     item_normalization = get_item_normalization()
     store_list = "、".join(known_stores)
     unit_lines, box_count_str, spec_master_section = _build_spec_master_prompt_sections()
-    
-    prompt = f"""
-    メール本文から注文情報を抽出し、JSON形式で返してください。
-    
-    【送信者】{sender}
-    【件名】{subject}
-    
-    【店舗名リスト（参考）】
-    {store_list}
-    ※リストになくても、文脈から店舗名と判断できる場合は抽出してください。
-    
-    【品目名の正規化ルール】
-    {json.dumps(item_normalization, ensure_ascii=False, indent=2)}
-    
-    {spec_master_section}
-    
-    【計算ルール（1コンテナあたりの入数）】
-    {unit_lines}
-    
-    【合計数量(total)の取り方】
-    - 合計数量：メール内の「×」の後の数字を合計数量(total)とします。※「胡瓜バラ 50×4」のように「数×数」の表記の場合は、50×4＝200 として total に入れてください。
-    - 箱数で受信する品目（{box_count_str}）のみ：「×」の後の数字を箱数とし、合計数量＝箱数×入数 として total に入れてください（例：4箱・入数30 → total=120）。箱数・端数は出力不要です（Python側で計算します）。
-    
-    【重要ルール】
-    - 出力は純粋なJSONのみ (Markdown記法なし)。
-    - unit と total には「数字のみ」を入れてください。
-    - 日付情報が含まれている場合でも、今回の出力には含めず、注文明細のみ抽出してください。
-    
-    【出力JSON形式】
-    [{{"store":"店舗名","item":"品目名","spec":"規格","unit":数字,"total":数字}}]
-    
-    【メール本文】
-    {text}
-    """
+    norm_json = json.dumps(item_normalization, ensure_ascii=False)
+    prompt = f"""メール本文から注文のみ抽出し、JSONのみ返す。送信者:{sender} 件名:{subject}
+【店舗】{store_list}（文脈から判断可）
+【品目正規化】{norm_json}
+{spec_master_section}
+【入数】{unit_lines}
+【total】「×」の後を合計。50×4→200。箱数で受信（{box_count_str}）は「×」後を箱数とし total=箱数×入数。unit/totalは数字のみ。日付は出力しない。
+【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]（Markdownなし）
+【本文】
+{text}"""
     
     try:
         response = _generate_content_with_retry(model, prompt)
