@@ -32,8 +32,9 @@ DEFAULT_STORES = ["鎌ケ谷", "五香", "八柱", "青葉台", "咲が丘", "�
 DEFAULT_ITEMS = {
     "青梗菜": ["青梗菜", "チンゲン菜", "ちんげん菜", "チンゲンサイ", "ちんげんさい"],
     "胡瓜": ["胡瓜", "きゅうり", "キュウリ", "胡瓜（袋）"],
-    "胡瓜平箱": ["胡瓜平箱", "胡瓜平箱"],
-    "胡瓜バラ": ["胡瓜バラ", "きゅうりバラ", "キュウリバラ", "胡瓜ばら"],
+    "胡瓜平箱": ["胡瓜平箱"],
+    "胡瓜バラ(100本)": ["胡瓜バラ", "きゅうりバラ", "キュウリバラ", "胡瓜ばら"],
+    "胡瓜バラ(50本)": ["胡瓜バラ50本"],
     "長ネギ": ["長ネギ", "ネギ", "ねぎ", "長ねぎ", "長ねぎ（袋）"],
     "長ねぎバラ": ["長ねぎバラ", "長ネギバラ", "ネギバラ", "ねぎバラ", "長ねぎばら"],
     "春菊": ["春菊", "しゅんぎく", "シュンギク"]
@@ -209,7 +210,7 @@ def initialize_default_units():
     units = load_units()
     updated = False
     default_unit_map = {
-        ("胡瓜", ""): 30, ("胡瓜平箱", ""): 50, ("胡瓜バラ", ""): 100,
+        ("胡瓜", ""): 30, ("胡瓜平箱", ""): 50, ("胡瓜バラ(100本)", ""): 100, ("胡瓜バラ(50本)", ""): 50,
         ("長ネギ", ""): 30, ("長ねぎバラ", ""): 50, ("春菊", ""): 30, ("青梗菜", ""): 20,
     }
     stores = load_stores()
@@ -226,7 +227,8 @@ def initialize_default_units():
 DEFAULT_ITEM_SETTINGS = {
     "胡瓜": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 30},
     "胡瓜平箱": {"default_unit": 50, "unit_type": "袋", "receive_as_boxes": True, "min_shipping_unit": 50},
-    "胡瓜バラ": {"default_unit": 100, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 30},
+    "胡瓜バラ(100本)": {"default_unit": 100, "unit_type": "本", "receive_as_boxes": True, "min_shipping_unit": 0},
+    "胡瓜バラ(50本)": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": True, "min_shipping_unit": 0},
     "長ネギ": {"default_unit": 30, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 1},
     "長ねぎバラ": {"default_unit": 50, "unit_type": "本", "receive_as_boxes": False, "min_shipping_unit": 1},
     "春菊": {"default_unit": 30, "unit_type": "袋", "receive_as_boxes": False, "min_shipping_unit": 1},
@@ -318,9 +320,9 @@ def save_item_spec_master(rows: List[Dict[str, Any]]) -> None:
 
 
 # 品目・規格が分かれて解析された場合に、品目名管理の「品目（複合名）」で再検索するための対応表。
-# 解析結果が 品目=胡瓜・規格=バラ のとき、マスタの「胡瓜バラ」行（100入り等）を参照する。
+# 解析結果が 品目=胡瓜・規格=バラ のとき、デフォルトで「胡瓜バラ(100本)」を参照。50本×1のときは unit_from_text で上書き。
 ITEM_SPEC_COMPOSITE_LOOKUP = {
-    ("胡瓜", "バラ"): "胡瓜バラ",
+    ("胡瓜", "バラ"): "胡瓜バラ(100本)",
     ("胡瓜", "平箱"): "胡瓜平箱",
     ("長ネギ", "バラ"): "長ねぎバラ",
     ("長ねぎ", "バラ"): "長ねぎバラ",
@@ -428,8 +430,8 @@ def get_default_spec_for_item(item_name: str) -> str:
     """品目名に対する規格の既定表示値。品目名管理で規格が空のときに表示・保存で使う。"""
     s = (item_name or "").strip()
     _defaults = {
-        "胡瓜": "バラ", "胡瓜バラ": "バラ", "胡瓜平箱": "平箱",
-        "長ネギ": "バラ", "長ねぎ": "バラ", "長ねぎバラ": "バラ", "長ネギバラ": "バラ",
+        "胡瓜": "3本", "胡瓜平箱": "平箱", "胡瓜バラ(100本)": "バラ", "胡瓜バラ(50本)": "バラ",
+        "長ネギ": "2本", "長ねぎ": "2本", "長ねぎバラ": "バラ", "長ネギバラ": "バラ",
         "春菊": "1束", "青梗菜": "2~3株", "チンゲン菜": "2~3株",
     }
     return _defaults.get(s, "")

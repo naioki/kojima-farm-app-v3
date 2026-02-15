@@ -355,8 +355,8 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 ・ネギ2本×120 → total=120
 例外1) 箱数で受信の品目（{box_count_str}）のみ：「×」後を箱数とし total=箱数×入数。例：胡瓜平箱×1→total=50。
 例外2) 「胡瓜バラ 50×4」のように「数×数」の掛け算表記のときは 50×4=200 を total に。
-例外3) 規格バラで「100本×7」のように入数が明記されている場合は unit_from_text:100, input_num:7 を入れ、totalは100*7=700。
-【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数,"input_num":数}}]。input_numは「×」の直後の数値。総数品目ではinput_num=合計数量、箱数品目（{box_count_str}）ではinput_num=箱数。バラでN本×Mのときは unit_from_text:N, input_num:M。
+例外3) 規格バラで入数が明記されている場合のみ unit_from_text と input_num を入れる。例：「100本×7」→ unit_from_text:100, input_num:7, total=700。「50本×1」→ unit_from_text:50, input_num:1, total=50。
+【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数,"input_num":数}}]。input_numは「×」の直後の数値。総数品目ではinput_num=合計数量、箱数品目（{box_count_str}）ではinput_num=箱数。バラでN本×Mのときは必ず unit_from_text:N, input_num:M を入れる。
 全店舗・全品目を漏れなく。長ネギ2本は入数30で計算すること。"""
     try:
         response = _generate_content_with_retry(model, [prompt, image])
@@ -420,8 +420,8 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
 ・胡瓜3本×150→total=150 ・春菊×20→total=20 ・青梗菜×15→total=15 ・ネギ2本×120→total=120
 例外1) 箱数で受信（{box_count_str}）のみ：「×」後を箱数とし total=箱数×入数。例：胡瓜平箱×1→total=50。
 例外2) 「50×4」の掛け算表記のときは 50×4=200 を total に。春菊・青梗菜は規格省略可。長ネギ2本はunit=30。日付は出力しない。
-例外3) 規格バラで「100本×7」のように入数が明記されている場合は unit_from_text:100, input_num:7 を入れ、totalは700。
-【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数,"input_num":数}}]（Markdownなし）。input_numは「×」の直後の数値。総数ではinput_num=合計数量、箱数品目（{box_count_str}）ではinput_num=箱数。バラでN本×Mのときは unit_from_text:N, input_num:M。
+例外3) 規格バラで入数が明記されている場合のみ unit_from_text と input_num を入れる。例：「100本×7」→ unit_from_text:100, input_num:7, total=700。「50本×1」→ unit_from_text:50, input_num:1, total=50。
+【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数,"input_num":数}}]（Markdownなし）。input_numは「×」の直後の数値。総数ではinput_num=合計数量、箱数品目（{box_count_str}）ではinput_num=箱数。バラでN本×Mのときは必ず unit_from_text:N, input_num:M を入れる。
 【本文】
 {text}"""
     
