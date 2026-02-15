@@ -19,7 +19,7 @@ from config_manager import (
     load_items, auto_learn_item,
     load_item_settings, get_box_count_items,
     lookup_unit, get_item_setting, add_unit_if_new,
-    get_effective_unit_size,
+    get_effective_unit_size, extract_unit_size_from_spec,
     load_item_spec_master,
     get_default_spec_for_item,
 )
@@ -125,8 +125,9 @@ def _fix_total_when_ai_sent_boxes_times_unit(entries: list) -> None:
 def _fix_known_misread_patterns(entries: list) -> None:
     """
     実運用で判明した誤読パターンを明示的に補正する。
-    1) 青葉台 / 胡瓜 / バラ: 「胡瓜バラ50本×1」の「50」を箱数と誤認し 100×50=5000 になっている → 合計50に修正。
-    2) 習志野台 / 長ネギ / 2本: 「2本×80 (合計80)」が別の計算(30×21+10=640)になっている → 合計80に修正。
+    1) 青葉台 / 胡瓜 / バラ: 「50本×1」→ 入数50・箱数1・合計50。入数100固定をやめ、50本×1の意図を反映。
+    2) 習志野台 / 長ネギ / 2本: 「2本×80」が 30×21+10=640 になっている → 合計80に修正。
+    3) 胡瓜 / N本: 「3本×210」は「3本入りが210袋」→ 入数3・箱数210・合計630。×の後を箱数として扱う。
     """
     for entry in entries:
         if not isinstance(entry, dict):
@@ -139,18 +140,46 @@ def _fix_known_misread_patterns(entries: list) -> None:
         boxes = safe_int(entry.get("boxes", 0))
         remainder = safe_int(entry.get("remainder", 0))
         normalized_item = normalize_item_name(item, auto_learn=False)
+        setting = get_item_setting(normalized_item or item, spec)
+        master_unit = int(setting.get("default_unit", 0)) or 0
 
-        # 1) 青葉台 胡瓜 バラ: 「50本×1」の50を箱数と誤認 → total=5000 (100×50) を total=50 に
+        # 1) 青葉台 胡瓜 バラ: 「50本×1」→ 入数50, 箱数1, 合計50（入数100で固定しない）
         if "青葉台" in store and (normalized_item == "胡瓜" or "胡瓜" in (normalized_item or item)) and (spec == "バラ" or "バラ" in spec):
             if total == 5000 and unit == 100 and boxes == 50 and remainder == 0:
                 entry["total"] = 50
-                entry["boxes"], entry["remainder"] = total_to_boxes_remainder(50, 100)
+                entry["unit"] = 50
+                entry["boxes"] = 1
+                entry["remainder"] = 0
+            elif total == 100 and unit == 100 and boxes == 1 and remainder == 0:
+                entry["total"] = 50
+                entry["unit"] = 50
+                entry["boxes"] = 1
+                entry["remainder"] = 0
+            elif total == 50 and unit == 100 and boxes == 0 and remainder == 50:
+                entry["unit"] = 50
+                entry["boxes"] = 1
+                entry["remainder"] = 0
 
         # 2) 習志野台 長ネギ 2本: 「2本×80」が 30×21+10=640 と誤計算 → total=80 に
         if "習志野台" in store and (normalized_item == "長ネギ" or "ネギ" in (normalized_item or item)) and (spec == "2本" or spec == "２本"):
             if total == 640 and unit == 30 and boxes == 21 and remainder == 10:
                 entry["total"] = 80
                 entry["boxes"], entry["remainder"] = total_to_boxes_remainder(80, 30)
+
+        # 3) 胡瓜 N本: 「N本×〇〇」は「N本入りが〇〇袋/箱」→ 入数=N, 箱数=〇〇, 合計=N×〇〇。マスタ入数で割って出した箱数を、規格のNで入数にし直す。
+        spec_unit = extract_unit_size_from_spec(spec)
+        if (
+            spec_unit > 0
+            and total > 0
+            and total % spec_unit == 0
+            and (normalized_item == "胡瓜" or "胡瓜" in (normalized_item or item))
+            and ("本" in (spec or ""))
+        ):
+            # 現在マスタ入数で箱数・端数が計算されている（例: 入数30, 箱数21, 合計630）→ 入数3, 箱数210 に
+            if unit == master_unit and remainder == 0 and unit != spec_unit:
+                entry["unit"] = spec_unit
+                entry["boxes"] = total // spec_unit
+                entry["remainder"] = 0
 
 
 def normalize_spec_from_parse(spec_str: str) -> str:

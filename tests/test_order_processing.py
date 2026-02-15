@@ -157,14 +157,15 @@ def test_fix_total_does_not_correct_valid_total_500(mock_get_setting, mock_norm)
 
 
 def test_fix_known_misread_aobadai_kuwari_bara():
-    """青葉台 胡瓜 バラ: 「50本×1」の50を箱数と誤認 → total=5000 を total=50 に補正"""
+    """青葉台 胡瓜 バラ: 「50本×1」の50を箱数と誤認 → 入数50, 箱数1, 合計50に補正"""
     entries = [
         {"store": "青葉台", "item": "胡瓜", "spec": "バラ", "unit": 100, "total": 5000, "boxes": 50, "remainder": 0}
     ]
     _fix_known_misread_patterns(entries)
     assert entries[0]["total"] == 50
-    assert entries[0]["boxes"] == 0
-    assert entries[0]["remainder"] == 50
+    assert entries[0]["unit"] == 50
+    assert entries[0]["boxes"] == 1
+    assert entries[0]["remainder"] == 0
 
 
 def test_fix_known_misread_narashinodai_negi_2hon():
@@ -176,4 +177,29 @@ def test_fix_known_misread_narashinodai_negi_2hon():
     assert entries[0]["total"] == 80
     assert entries[0]["boxes"] == 2
     assert entries[0]["remainder"] == 20
+
+
+def test_fix_known_misread_aobadai_kuwari_bara_50_display():
+    """青葉台 胡瓜 バラ: 「50本×1」→ 入数50, 箱数1, 合計50で表示（入数100固定をやめる）"""
+    # total=100, unit=100, boxes=1 の誤りパターン
+    entries = [
+        {"store": "青葉台", "item": "胡瓜", "spec": "バラ", "unit": 100, "total": 100, "boxes": 1, "remainder": 0}
+    ]
+    _fix_known_misread_patterns(entries)
+    assert entries[0]["total"] == 50
+    assert entries[0]["unit"] == 50
+    assert entries[0]["boxes"] == 1
+    assert entries[0]["remainder"] == 0
+
+
+def test_fix_known_misread_kyuri_3hon_boxes():
+    """胡瓜 3本: 「3本×210」→ 入数3, 箱数210, 合計630（×の後を箱数として扱う）"""
+    entries = [
+        {"store": "八柱", "item": "胡瓜", "spec": "3本", "unit": 30, "total": 630, "boxes": 21, "remainder": 0}
+    ]
+    _fix_known_misread_patterns(entries)
+    assert entries[0]["unit"] == 3
+    assert entries[0]["boxes"] == 210
+    assert entries[0]["remainder"] == 0
+    assert entries[0]["total"] == 630
 
