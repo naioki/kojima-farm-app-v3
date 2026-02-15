@@ -7,6 +7,7 @@ from order_processing import (
     normalize_item_name,
     _compute_boxes_remainder_from_total,
     _fix_total_when_ai_sent_boxes_times_unit,
+    _fix_known_misread_patterns,
 )
 
 def test_safe_int():
@@ -153,4 +154,26 @@ def test_fix_total_does_not_correct_valid_total_500(mock_get_setting, mock_norm)
     assert entries[0]["total"] == 500
     assert entries[0]["boxes"] == 10
     assert entries[0]["remainder"] == 0
+
+
+def test_fix_known_misread_aobadai_kuwari_bara():
+    """青葉台 胡瓜 バラ: 「50本×1」の50を箱数と誤認 → total=5000 を total=50 に補正"""
+    entries = [
+        {"store": "青葉台", "item": "胡瓜", "spec": "バラ", "unit": 100, "total": 5000, "boxes": 50, "remainder": 0}
+    ]
+    _fix_known_misread_patterns(entries)
+    assert entries[0]["total"] == 50
+    assert entries[0]["boxes"] == 0
+    assert entries[0]["remainder"] == 50
+
+
+def test_fix_known_misread_narashinodai_negi_2hon():
+    """習志野台 長ネギ 2本: 「2本×80」が 30×21+10=640 と誤計算 → total=80 に補正"""
+    entries = [
+        {"store": "習志野台", "item": "長ネギ", "spec": "2本", "unit": 30, "total": 640, "boxes": 21, "remainder": 10}
+    ]
+    _fix_known_misread_patterns(entries)
+    assert entries[0]["total"] == 80
+    assert entries[0]["boxes"] == 2
+    assert entries[0]["remainder"] == 20
 

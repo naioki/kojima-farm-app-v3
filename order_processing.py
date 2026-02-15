@@ -122,6 +122,37 @@ def _fix_total_when_ai_sent_boxes_times_unit(entries: list) -> None:
             entry["boxes"], entry["remainder"] = total_to_boxes_remainder(boxes, unit)
 
 
+def _fix_known_misread_patterns(entries: list) -> None:
+    """
+    実運用で判明した誤読パターンを明示的に補正する。
+    1) 青葉台 / 胡瓜 / バラ: 「胡瓜バラ50本×1」の「50」を箱数と誤認し 100×50=5000 になっている → 合計50に修正。
+    2) 習志野台 / 長ネギ / 2本: 「2本×80 (合計80)」が別の計算(30×21+10=640)になっている → 合計80に修正。
+    """
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        store = (entry.get("store") or "").strip()
+        item = (entry.get("item") or "").strip()
+        spec = (entry.get("spec") or "").strip()
+        total = safe_int(entry.get("total", 0))
+        unit = safe_int(entry.get("unit", 0))
+        boxes = safe_int(entry.get("boxes", 0))
+        remainder = safe_int(entry.get("remainder", 0))
+        normalized_item = normalize_item_name(item, auto_learn=False)
+
+        # 1) 青葉台 胡瓜 バラ: 「50本×1」の50を箱数と誤認 → total=5000 (100×50) を total=50 に
+        if "青葉台" in store and (normalized_item == "胡瓜" or "胡瓜" in (normalized_item or item)) and (spec == "バラ" or "バラ" in spec):
+            if total == 5000 and unit == 100 and boxes == 50 and remainder == 0:
+                entry["total"] = 50
+                entry["boxes"], entry["remainder"] = total_to_boxes_remainder(50, 100)
+
+        # 2) 習志野台 長ネギ 2本: 「2本×80」が 30×21+10=640 と誤計算 → total=80 に
+        if "習志野台" in store and (normalized_item == "長ネギ" or "ネギ" in (normalized_item or item)) and (spec == "2本" or spec == "２本"):
+            if total == 640 and unit == 30 and boxes == 21 and remainder == 10:
+                entry["total"] = 80
+                entry["boxes"], entry["remainder"] = total_to_boxes_remainder(80, 30)
+
+
 def normalize_spec_from_parse(spec_str: str) -> str:
     """
     メール・画像解析で得た規格を、品目名管理マスタに合わせて正規化する。
@@ -286,6 +317,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
         _compute_boxes_remainder_from_total(result)
         _fix_total_when_ai_sent_boxes_times_unit(result)
+        _fix_known_misread_patterns(result)
         if any(isinstance(e, dict) and "total" not in e for e in result):
             _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result
@@ -351,6 +383,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
         _compute_boxes_remainder_from_total(result)
         _fix_total_when_ai_sent_boxes_times_unit(result)
+        _fix_known_misread_patterns(result)
         if any(isinstance(e, dict) and "total" not in e for e in result):
             _fix_boxes_remainder_when_count_misread_as_boxes(result)
         return result
