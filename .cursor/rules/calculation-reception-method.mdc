@@ -1,0 +1,20 @@
+---
+description: 計算ロジックは「受信方法」で分岐する。変更時は必ず docs/計算ロジック仕様_受信方法分岐.md を参照する。
+globs: ["**/order_processing.py", "**/box_remainder_calc.py", "**/config_manager.py", "**/app.py", "**/docs/計算ロジック*.md"]
+alwaysApply: true
+---
+
+# 計算ロジック：受信方法分岐（必ず参照）
+
+**注文解析後の計算処理を触る場合、必ず次の仕様書を参照すること。**
+
+- **仕様書**: `docs/計算ロジック仕様_受信方法分岐.md`
+
+## 守ること
+
+1. **受信方法「総数」**: 「×」の後 = 合計数量。箱数 = total // master_unit、端数 = total % master_unit。
+2. **受信方法「箱数」**: 「×」の後 = 箱数。合計数量 = boxes × master_unit、端数 = 0。
+3. **バラの数値指定**: 「100本×7」など入数明記時はマスター入数を無視し、入数=100 で合計=700 とする。
+4. 実装は `box_remainder_calc.calculate_inventory` と `order_processing._compute_from_input_num_by_reception` に集約されている。直書きの割り算を追加しない。
+
+計算・解析・プロンプトを変更したら、`docs/計算ロジック仕様_受信方法分岐.md` の記述と矛盾していないか確認し、関連テストを実行すること。

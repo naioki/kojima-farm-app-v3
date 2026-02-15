@@ -19,12 +19,12 @@ from config_manager import (
     load_items, auto_learn_item,
     load_item_settings, get_box_count_items,
     lookup_unit, get_item_setting, add_unit_if_new,
-    get_effective_unit_size, extract_unit_size_from_spec,
+    get_effective_unit_size,
     load_item_spec_master,
     get_default_spec_for_item,
 )
 from error_display_util import format_error_display
-from box_remainder_calc import total_to_boxes_remainder
+from box_remainder_calc import total_to_boxes_remainder, calculate_inventory
 
 def safe_int(v):
     if v is None:
@@ -45,6 +45,7 @@ def _compute_boxes_remainder_from_total(entries: list) -> None:
     """
     AIが返した合計数量(total)から、Pythonで箱数・端数を計算して entry に設定する。
     箱数 = 合計数量 ÷ 入数 の商、端数 = 余り。入数は入り数マスタ（品目名管理）を常に優先する。
+    （受信方法分岐は _compute_from_input_num_by_reception で実施。互換用に残す）
     """
     for entry in entries:
         if not isinstance(entry, dict):
@@ -67,6 +68,54 @@ def _compute_boxes_remainder_from_total(entries: list) -> None:
             boxes, remainder = total_to_boxes_remainder(total, unit)
             entry["boxes"] = boxes
             entry["remainder"] = remainder
+
+
+def _compute_from_input_num_by_reception(entries: list) -> None:
+    """
+    マスタの「受信方法」（総数/箱数）に基づき、注文の「×」の後ろの数値(input_num)から
+    合計数量・箱数・端数を算出して entry に反映する。
+    - 総数: input_num = 合計数量 → boxes = total // unit, remainder = total % unit
+    - 箱数: input_num = 箱数 → total = boxes * unit, remainder = 0
+    - バラで「100本×7」など入数明記時: unit_override を使い total = 100*7
+    entry に input_num があればそれを使用。なければ total から逆算（後方互換）。
+    """
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        item = (entry.get("item") or "").strip()
+        spec = (entry.get("spec") or "").strip()
+        normalized = normalize_item_name(item, auto_learn=False)
+        setting = get_item_setting(normalized or item, spec)
+        master_unit = int(setting.get("default_unit", 0)) or 0
+        receive_as_boxes = bool(setting.get("receive_as_boxes", False))
+        unit_override = entry.get("unit_from_text")
+        if unit_override is not None:
+            unit_override = safe_int(unit_override)
+
+        input_num = entry.get("input_num")
+        if input_num is not None:
+            input_num = safe_int(input_num)
+        else:
+            total = safe_int(entry.get("total", 0))
+            if receive_as_boxes and master_unit > 0 and total > 0 and total % master_unit == 0:
+                input_num = total // master_unit
+            else:
+                input_num = total
+
+        if master_unit <= 0 and (unit_override is None or unit_override <= 0):
+            entry["boxes"] = 0
+            entry["remainder"] = input_num
+            entry["total"] = input_num
+            entry["unit"] = safe_int(entry.get("unit", 0)) or 0
+            continue
+
+        total, boxes, remainder, unit_used = calculate_inventory(
+            input_num, master_unit, receive_as_boxes, unit_override
+        )
+        entry["total"] = total
+        entry["boxes"] = boxes
+        entry["remainder"] = remainder
+        entry["unit"] = unit_used
 
 
 def _fix_boxes_remainder_when_count_misread_as_boxes(entries: list) -> None:
@@ -127,7 +176,7 @@ def _fix_known_misread_patterns(entries: list) -> None:
     実運用で判明した誤読パターンを明示的に補正する。
     1) 青葉台 / 胡瓜 / バラ: 「50本×1」→ 入数50・箱数1・合計50。入数100固定をやめ、50本×1の意図を反映。
     2) 習志野台 / 長ネギ / 2本: 「2本×80」が 30×21+10=640 になっている → 合計80に修正。
-    3) 胡瓜 / N本: 「3本×210」は「3本入りが210袋」→ 入数3・箱数210・合計630。×の後を箱数として扱う。
+    注: 胡瓜3本などマスタで「1コンテナあたりの入数」が決まっている品目は、入数は常にマスタ値（30）、箱数は合計数量÷入数で算出する（「3本×50」でも入数30・箱数5）。
     """
     for entry in entries:
         if not isinstance(entry, dict):
@@ -140,8 +189,6 @@ def _fix_known_misread_patterns(entries: list) -> None:
         boxes = safe_int(entry.get("boxes", 0))
         remainder = safe_int(entry.get("remainder", 0))
         normalized_item = normalize_item_name(item, auto_learn=False)
-        setting = get_item_setting(normalized_item or item, spec)
-        master_unit = int(setting.get("default_unit", 0)) or 0
 
         # 1) 青葉台 胡瓜 バラ: 「50本×1」→ 入数50, 箱数1, 合計50（入数100で固定しない）
         if "青葉台" in store and (normalized_item == "胡瓜" or "胡瓜" in (normalized_item or item)) and (spec == "バラ" or "バラ" in spec):
@@ -165,21 +212,6 @@ def _fix_known_misread_patterns(entries: list) -> None:
             if total == 640 and unit == 30 and boxes == 21 and remainder == 10:
                 entry["total"] = 80
                 entry["boxes"], entry["remainder"] = total_to_boxes_remainder(80, 30)
-
-        # 3) 胡瓜 N本: 「N本×〇〇」は「N本入りが〇〇袋/箱」→ 入数=N, 箱数=〇〇, 合計=N×〇〇。マスタ入数で割って出した箱数を、規格のNで入数にし直す。
-        spec_unit = extract_unit_size_from_spec(spec)
-        if (
-            spec_unit > 0
-            and total > 0
-            and total % spec_unit == 0
-            and (normalized_item == "胡瓜" or "胡瓜" in (normalized_item or item))
-            and ("本" in (spec or ""))
-        ):
-            # 現在マスタ入数で箱数・端数が計算されている（例: 入数30, 箱数21, 合計630）→ 入数3, 箱数210 に
-            if unit == master_unit and remainder == 0 and unit != spec_unit:
-                entry["unit"] = spec_unit
-                entry["boxes"] = total // spec_unit
-                entry["remainder"] = 0
 
 
 def normalize_spec_from_parse(spec_str: str) -> str:
@@ -323,7 +355,8 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
 ・ネギ2本×120 → total=120
 例外1) 箱数で受信の品目（{box_count_str}）のみ：「×」後を箱数とし total=箱数×入数。例：胡瓜平箱×1→total=50。
 例外2) 「胡瓜バラ 50×4」のように「数×数」の掛け算表記のときは 50×4=200 を total に。
-【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]
+例外3) 規格バラで「100本×7」のように入数が明記されている場合は unit_from_text:100, input_num:7 を入れ、totalは100*7=700。
+【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数,"input_num":数}}]。input_numは「×」の直後の数値。総数品目ではinput_num=合計数量、箱数品目（{box_count_str}）ではinput_num=箱数。バラでN本×Mのときは unit_from_text:N, input_num:M。
 全店舗・全品目を漏れなく。長ネギ2本は入数30で計算すること。"""
     try:
         response = _generate_content_with_retry(model, [prompt, image])
@@ -344,7 +377,7 @@ def parse_order_image(image: Image.Image, api_key: str) -> list:
                 entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
-        _compute_boxes_remainder_from_total(result)
+        _compute_from_input_num_by_reception(result)
         _fix_total_when_ai_sent_boxes_times_unit(result)
         _fix_known_misread_patterns(result)
         if any(isinstance(e, dict) and "total" not in e for e in result):
@@ -387,7 +420,8 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
 ・胡瓜3本×150→total=150 ・春菊×20→total=20 ・青梗菜×15→total=15 ・ネギ2本×120→total=120
 例外1) 箱数で受信（{box_count_str}）のみ：「×」後を箱数とし total=箱数×入数。例：胡瓜平箱×1→total=50。
 例外2) 「50×4」の掛け算表記のときは 50×4=200 を total に。春菊・青梗菜は規格省略可。長ネギ2本はunit=30。日付は出力しない。
-【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数}}]（Markdownなし）
+例外3) 規格バラで「100本×7」のように入数が明記されている場合は unit_from_text:100, input_num:7 を入れ、totalは700。
+【出力】[{{"store":"店舗","item":"品目","spec":"規格","unit":数,"total":数,"input_num":数}}]（Markdownなし）。input_numは「×」の直後の数値。総数ではinput_num=合計数量、箱数品目（{box_count_str}）ではinput_num=箱数。バラでN本×Mのときは unit_from_text:N, input_num:M。
 【本文】
 {text}"""
     
@@ -410,7 +444,7 @@ def parse_order_text(text: str, sender: str, subject: str, api_key: str) -> list
                 entry["spec"] = normalize_spec_from_parse(entry.get("spec") or "")
                 if not (entry.get("spec") or "").strip():
                     entry["spec"] = get_default_spec_for_item(entry.get("item") or "")
-        _compute_boxes_remainder_from_total(result)
+        _compute_from_input_num_by_reception(result)
         _fix_total_when_ai_sent_boxes_times_unit(result)
         _fix_known_misread_patterns(result)
         if any(isinstance(e, dict) and "total" not in e for e in result):

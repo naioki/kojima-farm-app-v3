@@ -7,6 +7,7 @@ from box_remainder_calc import (
     total_to_boxes_remainder,
     boxes_remainder_to_total,
     check_invariant,
+    calculate_inventory,
 )
 
 
@@ -113,3 +114,35 @@ def test_regression_unit_as_total_interpretation():
     assert boxes == 0
     assert remainder == 20
     assert effective_unit * boxes + remainder == 20
+
+
+# --- 受信方法に基づく calculate_inventory ---
+
+
+def test_calculate_inventory_soryu():
+    """受信方法「総数」: 胡瓜3本×50 → input_num=50, unit=30 → total=50, boxes=1, remainder=20"""
+    total, boxes, remainder, unit_used = calculate_inventory(50, 30, receive_as_boxes=False)
+    assert total == 50
+    assert boxes == 1
+    assert remainder == 20
+    assert unit_used == 30
+
+
+def test_calculate_inventory_hakosu():
+    """受信方法「箱数」: 胡瓜平箱×2 → input_num=2, unit=50 → total=100, boxes=2, remainder=0"""
+    total, boxes, remainder, unit_used = calculate_inventory(2, 50, receive_as_boxes=True)
+    assert total == 100
+    assert boxes == 2
+    assert remainder == 0
+    assert unit_used == 50
+
+
+def test_calculate_inventory_bara_unit_override():
+    """バラの数値指定: 100本×7 → unit_override=100, input_num=7 → total=700, boxes=7, remainder=0"""
+    total, boxes, remainder, unit_used = calculate_inventory(
+        7, master_unit=100, receive_as_boxes=False, unit_override=100
+    )
+    assert total == 700
+    assert boxes == 7
+    assert remainder == 0
+    assert unit_used == 100

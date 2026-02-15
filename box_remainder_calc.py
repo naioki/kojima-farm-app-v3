@@ -9,7 +9,47 @@
 このモジュール以外で total//unit / total%unit を直書きしないこと。
 参照: docs/計算ロジックと品質保証.md
 """
-from typing import Tuple
+from typing import Tuple, Optional
+
+
+def calculate_inventory(
+    input_num: int,
+    master_unit: int,
+    receive_as_boxes: bool,
+    unit_override: Optional[int] = None,
+) -> Tuple[int, int, int, int]:
+    """
+    マスタの「受信方法」に基づき、注文の「×」の後の数値(input_num)から
+    合計数量・箱数・端数・使用入数を算出する。
+
+    A. 受信方法が「総数」: input_num = 合計数量。箱数=total//unit, 端数=余り。
+    B. 受信方法が「箱数」: input_num = 箱数。合計=箱数×入数, 端数=0。
+    例外: unit_override 指定時（バラで「100本×7」など）は入数=unit_override, 合計=unit_override×input_num。
+
+    Returns:
+        (total, boxes, remainder, unit_used)
+    """
+    input_num = max(0, int(input_num))
+    master_unit = max(0, int(master_unit))
+    if unit_override is not None and int(unit_override) > 0:
+        unit_used = int(unit_override)
+        boxes = input_num
+        total = boxes * unit_used
+        remainder = 0
+        return (total, boxes, remainder, unit_used)
+    if receive_as_boxes:
+        unit_used = master_unit if master_unit > 0 else 0
+        boxes = input_num
+        total = boxes * unit_used if unit_used > 0 else 0
+        remainder = 0
+        return (total, boxes, remainder, unit_used)
+    # 総数
+    unit_used = master_unit if master_unit > 0 else 0
+    total = input_num
+    if unit_used <= 0:
+        return (total, 0, total, 0)
+    boxes, remainder = total_to_boxes_remainder(total, unit_used)
+    return (total, boxes, remainder, unit_used)
 
 
 def total_to_boxes_remainder(total: int, unit: int) -> Tuple[int, int]:

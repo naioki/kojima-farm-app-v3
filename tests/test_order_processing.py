@@ -192,14 +192,14 @@ def test_fix_known_misread_aobadai_kuwari_bara_50_display():
     assert entries[0]["remainder"] == 0
 
 
-def test_fix_known_misread_kyuri_3hon_boxes():
-    """胡瓜 3本: 「3本×210」→ 入数3, 箱数210, 合計630（×の後を箱数として扱う）"""
+def test_fix_known_misread_kyuri_3hon_uses_master_unit():
+    """胡瓜 3本: マスタ入数30を優先。入数30・箱数=合計/30のまま補正しない（3本×50→入数30・箱数5は_computeで算出）"""
     entries = [
         {"store": "八柱", "item": "胡瓜", "spec": "3本", "unit": 30, "total": 630, "boxes": 21, "remainder": 0}
     ]
     _fix_known_misread_patterns(entries)
-    assert entries[0]["unit"] == 3
-    assert entries[0]["boxes"] == 210
+    assert entries[0]["unit"] == 30
+    assert entries[0]["boxes"] == 21
     assert entries[0]["remainder"] == 0
     assert entries[0]["total"] == 630
 
