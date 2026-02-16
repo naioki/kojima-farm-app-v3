@@ -19,7 +19,7 @@ from config_manager import (
     load_items, auto_learn_item,
     load_item_settings, get_box_count_items,
     lookup_unit, get_item_setting, add_unit_if_new,
-    get_effective_unit_size,
+    get_effective_unit_size, extract_unit_size_from_spec,
     load_item_spec_master,
     get_default_spec_for_item,
 )
@@ -91,14 +91,25 @@ def _compute_from_input_num_by_reception(entries: list) -> None:
         unit_override = entry.get("unit_from_text")
         if unit_override is not None:
             unit_override = safe_int(unit_override)
+        # 胡瓜バラで「100本×7」「50本×1」のとき、AIが unit_from_text を返さない場合に spec から入数を補完（受信方法は箱数なので「×」後＝箱数）
+        if unit_override is None and receive_as_boxes and spec in ("100本", "50本"):
+            u_from_spec = extract_unit_size_from_spec(spec)
+            if u_from_spec > 0:
+                unit_override = u_from_spec
 
         input_num = entry.get("input_num")
         if input_num is not None:
             input_num = safe_int(input_num)
         else:
             total = safe_int(entry.get("total", 0))
-            if receive_as_boxes and master_unit > 0 and total > 0 and total % master_unit == 0:
-                input_num = total // master_unit
+            # 受信方法「箱数」: 「×」の後は箱数。total が入数で割り切れるときは箱数＝total÷入数、そうでないときは total を箱数と解釈（AIが箱数を total に入れた場合）
+            effective_unit = int(unit_override) if (unit_override is not None and int(unit_override) > 0) else master_unit
+            if receive_as_boxes and effective_unit > 0 and total > 0:
+                if total % effective_unit == 0:
+                    input_num = total // effective_unit
+                else:
+                    # 例: 胡瓜バラ100本×7 で AI が total=7 と返した場合 → 7 を箱数として扱う
+                    input_num = total
             else:
                 input_num = total
 

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from config_manager import (
     extract_unit_size_from_spec,
     get_effective_unit_size,
+    get_item_setting,
 )
 
 
@@ -64,3 +65,17 @@ class TestGetEffectiveUnitSize:
     def test_未設定は0(self, mock_get_setting):
         mock_get_setting.return_value = {"default_unit": 0, "unit_type": "袋"}
         assert get_effective_unit_size("品目", "規格なし") == 0
+
+
+class TestGetItemSettingKuwariBaraSpec:
+    """胡瓜バラで spec が 100本/50本 のときも受信方法「箱数」の設定を返す"""
+
+    def test_胡瓜_100本_returns_receive_as_boxes_and_unit_100(self):
+        s = get_item_setting("胡瓜", "100本")
+        assert s.get("receive_as_boxes") is True
+        assert s.get("default_unit") == 100
+
+    def test_胡瓜_50本_returns_receive_as_boxes_and_unit_50(self):
+        s = get_item_setting("胡瓜", "50本")
+        assert s.get("receive_as_boxes") is True
+        assert s.get("default_unit") == 50

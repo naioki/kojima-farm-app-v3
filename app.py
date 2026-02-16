@@ -42,6 +42,7 @@ from order_processing import (
     normalize_item_name, validate_store_name
 )
 from box_remainder_calc import total_to_boxes_remainder
+import sheets_config
 
 # 台帳スプレッドシートのデフォルトID（Secretsに未設定の場合に使用）
 DEFAULT_LEDGER_SPREADSHEET_ID = "1KJtpiaPjyH2bTaxULWwgemhZTCymfvsZPftfryQzXG4"
@@ -246,6 +247,25 @@ if 'email_password' not in st.session_state:
     st.session_state.email_password = ""
 if 'email_check_results' not in st.session_state:
     st.session_state.email_check_results = None
+
+# 品目マスタ Google Sheets 接続の初期化
+if 'sheets_config_initialized' not in st.session_state:
+    try:
+        _secrets = st.secrets if hasattr(st, 'secrets') else None
+        _sid_init = ""
+        if _secrets:
+            try:
+                _sid_init = _secrets.get("DELIVERY_SPREADSHEET_ID", "") or getattr(_secrets, "DELIVERY_SPREADSHEET_ID", "")
+            except Exception:
+                pass
+        sheets_config.init(
+            spreadsheet_id=_sid_init or DEFAULT_LEDGER_SPREADSHEET_ID,
+            st_secrets=_secrets,
+        )
+        st.session_state.sheets_config_initialized = True
+    except Exception as e:
+        print(f"[app] sheets_config init failed: {e}")
+        st.session_state.sheets_config_initialized = False
 
 if 'default_units_initialized' not in st.session_state:
     initialize_default_units()
@@ -1267,50 +1287,60 @@ with tab5:
                         st.success(f"✅ 「{store}」を削除しました")
                         st.rerun()
     st.divider()
-    st.subheader("🥬 品目名管理")
-    items = load_items()
-    item_settings = load_item_settings()
-    box_count_items = get_box_count_items()
+    st.subheader("🥬 品目マスタ管理")
+
+    # Sheets 接続状態の表示
+    _sheets_ok = sheets_config.is_available()
+    if _sheets_ok:
+        st.success("Google Sheets に接続中（品目マスタはスプレッドシートで管理されます）")
+    else:
+        st.info("ローカル JSON で管理中（Google Sheets 未接続）")
+
+    # マスタデータの読み込みと表示用変換
     spec_master = load_item_spec_master()
-    # 編集中データを session_state で保持し、タブ切り替えや再描画でも消えないようにする
+    items = load_items()
     _draft_key = "item_spec_master_draft"
-    def _spec_to_display_rows(spec_list):
+
+    def _to_display_rows(spec_list, items_dict):
         rows = []
         for r in spec_list:
-            u = r.get("default_unit", 0)
-            t = r.get("unit_type", "袋")
-            as_boxes = r.get("receive_as_boxes", False)
+            item = (r.get("品目") or "").strip()
             spec = (r.get("規格") or "").strip()
             if not spec:
-                spec = get_default_spec_for_item(r.get("品目", ""))
+                spec = get_default_spec_for_item(item)
+            # 別表記をカンマ区切りで表示
+            variants = items_dict.get(item, [])
+            alt_names = [v for v in variants if v != item]
             rows.append({
-                "品目": r.get("品目", ""),
+                "品目": item,
                 "規格": spec,
-                "1コンテナあたりの入数": u,
-                "単位": t,
-                "受信方法": "箱数" if as_boxes else "総数",
+                "別表記": ", ".join(alt_names),
+                "入数": r.get("default_unit", 0),
+                "単位": r.get("unit_type", "袋"),
+                "受信方法": "箱数" if r.get("receive_as_boxes") else "総数",
                 "削除": False,
             })
         return rows
+
     if spec_master:
         if _draft_key in st.session_state and st.session_state[_draft_key]:
-            draft_list = st.session_state[_draft_key]
-            master_rows = [{**r, "削除": False} for r in draft_list]
-            st.info("📝 未保存の編集があります。反映するには「マスターデータを保存」を押してください。")
+            master_rows = [{**r, "削除": False} for r in st.session_state[_draft_key]]
+            st.info("📝 未保存の編集があります。「マスターデータを保存」で反映してください。")
         else:
-            master_rows = _spec_to_display_rows(spec_master)
+            master_rows = _to_display_rows(spec_master, items)
         if master_rows:
             df_master = pd.DataFrame(master_rows)
             edited_master = st.data_editor(df_master, width="stretch", hide_index=True,
                 column_config={
                     "品目": st.column_config.TextColumn("品目"),
                     "規格": st.column_config.TextColumn("規格"),
-                    "1コンテナあたりの入数": st.column_config.NumberColumn("1コンテナあたりの入数", min_value=1, step=1),
+                    "別表記": st.column_config.TextColumn("別表記（カンマ区切り）", help="AI解析時に照合するバリアント名"),
+                    "入数": st.column_config.NumberColumn("入数", min_value=1, step=1),
                     "単位": st.column_config.SelectboxColumn("単位", options=["袋", "本"], required=True),
                     "受信方法": st.column_config.SelectboxColumn("受信方法", options=["総数", "箱数"], required=True),
-                    "削除": st.column_config.CheckboxColumn("削除", help="削除する行にチェックを入れ、下の「マスターデータを保存」で反映"),
+                    "削除": st.column_config.CheckboxColumn("削除", help="チェック → 保存で削除"),
                 })
-            # 編集結果をドラフトとして保持（「削除」にチェックした行は除外。ファイルと異なる場合のみ保持）
+            # ドラフト保持
             draft_rows = []
             for _, row in edited_master.iterrows():
                 if row.get("削除") is True:
@@ -1318,49 +1348,60 @@ with tab5:
                 draft_rows.append({
                     "品目": str(row.get("品目", "")).strip(),
                     "規格": str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else "",
-                    "1コンテナあたりの入数": int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30,
+                    "別表記": str(row.get("別表記", "")).strip() if pd.notna(row.get("別表記")) else "",
+                    "入数": int(row["入数"]) if row["入数"] > 0 else 30,
                     "単位": str(row["単位"]).strip() or "袋",
                     "受信方法": str(row["受信方法"]).strip(),
                 })
-            file_display = _spec_to_display_rows(spec_master)
-            file_display_for_compare = [{k: v for k, v in r.items() if k != "削除"} for r in file_display]
-            if draft_rows != file_display_for_compare:
+            saved_display = _to_display_rows(spec_master, items)
+            saved_for_compare = [{k: v for k, v in r.items() if k != "削除"} for r in saved_display]
+            if draft_rows != saved_for_compare:
                 st.session_state[_draft_key] = draft_rows
             elif _draft_key in st.session_state:
                 del st.session_state[_draft_key]
+
             col_save, col_reload = st.columns(2)
             with col_save:
                 if st.button("💾 マスターデータを保存", key="save_master_btn", type="primary"):
-                    key_to_orig = {((r.get("品目") or "").strip(), (r.get("規格") or "").strip()): r for r in spec_master}
                     out_rows = []
+                    new_items_dict = {}
                     for _, row in edited_master.iterrows():
                         if row.get("削除") is True:
                             continue
                         name = str(row.get("品目", "")).strip()
                         spec = str(row.get("規格", "")).strip() if pd.notna(row.get("規格")) else ""
-                        u = int(row["1コンテナあたりの入数"]) if row["1コンテナあたりの入数"] > 0 else 30
+                        u = int(row["入数"]) if row["入数"] > 0 else 30
                         t = str(row["単位"]).strip() or "袋"
                         as_boxes = str(row["受信方法"]).strip() == "箱数"
-                        orig = key_to_orig.get((name, spec)) or key_to_orig.get((name, ""))
-                        min_ship = int(orig.get("min_shipping_unit", 0)) or 0 if orig else 0
-                        out_rows.append({"品目": name, "規格": spec, "default_unit": u, "unit_type": t, "receive_as_boxes": as_boxes, "min_shipping_unit": min_ship})
+                        alt_text = str(row.get("別表記", "")).strip() if pd.notna(row.get("別表記")) else ""
+                        out_rows.append({"品目": name, "規格": spec, "default_unit": u, "unit_type": t, "receive_as_boxes": as_boxes, "min_shipping_unit": 0})
+                        # 別表記を items dict に反映
+                        alt_list = [v.strip() for v in alt_text.split(",") if v.strip()] if alt_text else []
+                        new_items_dict[name] = [name] + [v for v in alt_list if v != name]
                     save_item_spec_master(out_rows)
+                    save_items(new_items_dict)
                     if _draft_key in st.session_state:
                         del st.session_state[_draft_key]
-                    st.success("✅ マスターデータを保存しました。（config/item_spec_master.json）")
+                    if _sheets_ok:
+                        sheets_config.invalidate_cache()
+                    st.success("✅ マスターデータを保存しました。" + (" (Google Sheets)" if _sheets_ok else " (config/item_spec_master.json)"))
                     st.rerun()
             with col_reload:
-                if st.button("🔄 ファイルの内容に戻す", key="reload_master_btn", help="未保存の編集を破棄し、保存済みファイルの内容を再表示します"):
+                if st.button("🔄 最新データに戻す", key="reload_master_btn", help="未保存の編集を破棄"):
                     if _draft_key in st.session_state:
                         del st.session_state[_draft_key]
+                    if _sheets_ok:
+                        sheets_config.invalidate_cache()
                     st.rerun()
     st.divider()
+
+    # ---------- 新規品目追加 ----------
     st.caption("新規追加: 品目と規格（任意）を入力して追加します。")
     new_item = st.text_input("品目名", placeholder="例: 胡瓜", key="new_item_input")
     new_spec = st.text_input("規格", placeholder="例: バラ・平箱（空欄可）", key="new_spec_input")
     row1 = st.columns(2)
     with row1[0]:
-        new_item_unit = st.number_input("1コンテナあたりの入数", min_value=1, value=30, step=1, key="new_item_unit_input")
+        new_item_unit = st.number_input("入数", min_value=1, value=30, step=1, key="new_item_unit_input")
     with row1[1]:
         new_item_unit_type = st.selectbox("単位", ["袋", "本"], key="new_item_unit_type_input")
     if st.button("追加", key="add_item", type="primary"):
@@ -1375,51 +1416,47 @@ with tab5:
                 "default_unit": int(new_item_unit),
                 "unit_type": new_item_unit_type,
                 "receive_as_boxes": False,
+                "min_shipping_unit": 0,
             })
             save_item_spec_master(spec_master)
-            if "item_spec_master_draft" in st.session_state:
-                del st.session_state["item_spec_master_draft"]
-            st.session_state[f"item_expanded_{item_name}"] = True
+            if _draft_key in st.session_state:
+                del st.session_state[_draft_key]
+            if _sheets_ok:
+                sheets_config.invalidate_cache()
             st.success(f"✅ 「{item_name}」" + (f"（規格: {spec_name}）" if spec_name else "") + " を追加しました")
             st.rerun()
         else:
             st.warning("品目名を入力してください")
+
+    # ---------- JSON → Sheets 移行ボタン ----------
     st.divider()
-    if items:
-        st.write("**登録済み品目名**")
-        for normalized, variants in items.items():
-            setting = get_item_setting(normalized)
-            default_unit = setting.get("default_unit", 0)
-            unit_type = setting.get("unit_type", "袋")
-            receive_as_boxes = setting.get("receive_as_boxes", False)
-            setting_info = f"入数: {default_unit}{unit_type}/コンテナ" if default_unit > 0 else "入数: 未設定"
-            if receive_as_boxes:
-                setting_info += "・箱数で受信"
-            variants_display = ', '.join(variants[:3])
-            if len(variants) > 3:
-                variants_display += f" ... (+{len(variants)-3}件)"
-            expander_title = f"📦 {normalized} ｜ {setting_info} ｜ バリアント: {variants_display}"
-            with st.expander(expander_title, expanded=st.session_state.get(f"item_expanded_{normalized}", False)):
-                new_variant = st.text_input(f"「{normalized}」の新しい表記を追加", key=f"variant_{normalized}", placeholder="例: 別表記")
-                if st.button("追加", key=f"add_variant_{normalized}"):
-                    if new_variant and new_variant.strip():
-                        add_item_variant(normalized, new_variant.strip())
-                        st.success(f"✅ 「{new_variant.strip()}」を追加しました")
-                        st.rerun()
-                st.divider()
-                edit_unit = st.number_input("1コンテナあたりの入数", min_value=1, value=default_unit if default_unit > 0 else 30, step=1, key=f"edit_unit_{normalized}")
-                edit_unit_type = st.selectbox("単位", ["袋", "本"], index=0 if unit_type == "袋" else 1, key=f"edit_unit_type_{normalized}")
-                edit_receive = st.selectbox("受信方法", ["総数", "箱数"], index=1 if receive_as_boxes else 0, key=f"edit_receive_{normalized}")
-                if st.button("保存", key=f"save_setting_{normalized}", use_container_width=True):
-                    set_item_setting(normalized, int(edit_unit), edit_unit_type, receive_as_boxes=(edit_receive == "箱数"))
-                    st.success(f"✅ 「{normalized}」の設定を保存しました")
-                    st.rerun()
-                st.divider()
-                if st.button("🗑️ この品目を削除", key=f"del_item_{normalized}", type="secondary"):
-                    if remove_item(normalized):
-                        remove_item_setting(normalized)
-                        st.success(f"✅ 「{normalized}」を削除しました")
-                        st.rerun()
+    if _sheets_ok:
+        with st.expander("🔄 データ移行（JSON → Google Sheets）", expanded=False):
+            st.caption("ローカル JSON の品目マスタを Google Sheets に一括移行します。既存の Sheets データは上書きされます。")
+            if st.button("JSON → Sheets に移行", key="migrate_json_to_sheets_btn", type="secondary"):
+                try:
+                    from config_manager import ITEM_SPEC_MASTER_FILE, ITEMS_FILE
+                    import json as _json
+                    _spec_rows = []
+                    if ITEM_SPEC_MASTER_FILE.exists():
+                        with open(ITEM_SPEC_MASTER_FILE, "r", encoding="utf-8") as f:
+                            _spec_rows = _json.load(f)
+                    _items_dict = {}
+                    if ITEMS_FILE.exists():
+                        with open(ITEMS_FILE, "r", encoding="utf-8") as f:
+                            _items_dict = _json.load(f)
+                    if _spec_rows:
+                        ok, msg = sheets_config.migrate_json_to_sheet(_spec_rows, _items_dict)
+                        if ok:
+                            sheets_config.invalidate_cache()
+                            st.success(f"✅ 移行完了: {msg}")
+                            st.rerun()
+                        else:
+                            st.error(f"移行失敗: {msg}")
+                    else:
+                        st.warning("移行元の JSON データがありません。")
+                except Exception as e:
+                    st.error(f"移行エラー: {e}")
 
 @st.cache_data(ttl=3)
 def _cached_editor_config():

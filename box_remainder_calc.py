@@ -23,8 +23,8 @@ def calculate_inventory(
     合計数量・箱数・端数・使用入数を算出する。
 
     A. 受信方法が「総数」: input_num = 合計数量。箱数=total//unit, 端数=余り。
-    B. 受信方法が「箱数」: input_num = 箱数。合計=箱数×入数, 端数=0。
-    例外: unit_override 指定時（バラで「100本×7」など）は入数=unit_override, 合計=unit_override×input_num。
+    B. 受信方法が「箱数」: input_num = 箱数。合計=箱数×入数。端数は常に 0。
+    例外: unit_override 指定時（バラで「100本×7」「50本×1」など）は入数=unit_override, 合計=unit_override×input_num, 端数=0。
 
     Returns:
         (total, boxes, remainder, unit_used)

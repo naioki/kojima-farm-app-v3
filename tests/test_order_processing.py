@@ -6,6 +6,7 @@ from order_processing import (
     validate_store_name,
     normalize_item_name,
     _compute_boxes_remainder_from_total,
+    _compute_from_input_num_by_reception,
     _fix_total_when_ai_sent_boxes_times_unit,
     _fix_known_misread_patterns,
 )
@@ -202,4 +203,36 @@ def test_fix_known_misread_kyuri_3hon_uses_master_unit():
     assert entries[0]["boxes"] == 21
     assert entries[0]["remainder"] == 0
     assert entries[0]["total"] == 630
+
+
+@patch('order_processing.normalize_item_name')
+@patch('order_processing.get_item_setting')
+def test_compute_kuwari_bara_100hon_x7(mock_get_setting, mock_norm):
+    """胡瓜バラ100本×7: 受信方法「箱数」→ 入数100, 箱数7, 端数0, 合計700"""
+    mock_norm.return_value = "胡瓜"
+    mock_get_setting.return_value = {"default_unit": 100, "receive_as_boxes": True}
+    entries = [
+        {"store": "青葉台", "item": "胡瓜", "spec": "バラ", "unit_from_text": 100, "input_num": 7}
+    ]
+    _compute_from_input_num_by_reception(entries)
+    assert entries[0]["unit"] == 100
+    assert entries[0]["boxes"] == 7
+    assert entries[0]["remainder"] == 0
+    assert entries[0]["total"] == 700
+
+
+@patch('order_processing.normalize_item_name')
+@patch('order_processing.get_item_setting')
+def test_compute_kuwari_bara_50hon_x1(mock_get_setting, mock_norm):
+    """胡瓜バラ50本×1: 受信方法「箱数」→ 入数50, 箱数1, 端数0, 合計50"""
+    mock_norm.return_value = "胡瓜"
+    mock_get_setting.return_value = {"default_unit": 50, "receive_as_boxes": True}
+    entries = [
+        {"store": "青葉台", "item": "胡瓜", "spec": "バラ", "unit_from_text": 50, "input_num": 1}
+    ]
+    _compute_from_input_num_by_reception(entries)
+    assert entries[0]["unit"] == 50
+    assert entries[0]["boxes"] == 1
+    assert entries[0]["remainder"] == 0
+    assert entries[0]["total"] == 50
 

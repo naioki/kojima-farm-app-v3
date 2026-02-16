@@ -146,3 +146,14 @@ def test_calculate_inventory_bara_unit_override():
     assert boxes == 7
     assert remainder == 0
     assert unit_used == 100
+
+
+def test_calculate_inventory_bara_50hon_x1():
+    """胡瓜バラ(50本入り): 50本×1 → unit_override=50, input_num=1(箱数) → total=50, boxes=1, remainder=0"""
+    total, boxes, remainder, unit_used = calculate_inventory(
+        1, master_unit=50, receive_as_boxes=True, unit_override=50
+    )
+    assert total == 50
+    assert boxes == 1
+    assert remainder == 0
+    assert unit_used == 50
