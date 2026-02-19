@@ -31,9 +31,22 @@ def detect_imap_server(email_address: str) -> str:
 def ensure_config_dir():
     CONFIG_DIR.mkdir(exist_ok=True)
 
+def _get_secrets_password(st_secrets) -> str:
+    """Secretsからパスワードを取得（ファイル保存とは独立）"""
+    if st_secrets is None:
+        return ""
+    try:
+        secrets = st_secrets.get("email", {})
+        return secrets.get("email_password", "") if secrets else ""
+    except Exception:
+        return ""
+
+
 def load_email_config(st_secrets=None) -> Dict:
-    """保存済み設定を返す。ファイル保存を優先し、未保存時のみ Secrets を使う。"""
+    """保存済み設定を返す。ファイル保存を優先し、パスワードは常にSecretsから補完。"""
     ensure_config_dir()
+    secrets_pw = _get_secrets_password(st_secrets)
+
     if EMAIL_CONFIG_FILE.exists():
         try:
             with open(EMAIL_CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -42,6 +55,7 @@ def load_email_config(st_secrets=None) -> Dict:
                     return {
                         "imap_server": config.get("imap_server", ""),
                         "email_address": config.get("email_address", ""),
+                        "email_password": secrets_pw,
                         "sender_email": config.get("sender_email", ""),
                         "days_back": config.get("days_back", 1),
                     }
@@ -54,7 +68,7 @@ def load_email_config(st_secrets=None) -> Dict:
                 return {
                     "imap_server": secrets.get("imap_server", ""),
                     "email_address": secrets.get("email_address", ""),
-                    "email_password": secrets.get("email_password", ""),
+                    "email_password": secrets_pw,
                     "sender_email": secrets.get("sender_email", ""),
                     "days_back": secrets.get("days_back", 1),
                 }
