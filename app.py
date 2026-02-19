@@ -838,9 +838,9 @@ with tab2:
         default_imap = saved_config.get("imap_server", "") or (detect_imap_server(saved_config.get("email_address", "")) if saved_config.get("email_address") else "imap.gmail.com")
         imap_server = st.text_input("IMAPサーバー", value=default_imap or "imap.gmail.com")
         email_address = st.text_input("メールアドレス", value=saved_config.get("email_address", ""), key="email_addr_input")
-        if email_address and "@" in email_address:
+        if email_address and "@" in email_address and not saved_config.get("imap_server"):
             auto_detected = detect_imap_server(email_address)
-            if auto_detected != default_imap:
+            if auto_detected != imap_server:
                 imap_server = auto_detected
         secrets_pw = saved_config.get("email_password", "")
         if secrets_pw and not st.session_state.email_password:
