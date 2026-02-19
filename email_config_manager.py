@@ -54,12 +54,13 @@ def load_email_config(st_secrets=None) -> Dict:
                 return {
                     "imap_server": secrets.get("imap_server", ""),
                     "email_address": secrets.get("email_address", ""),
+                    "email_password": secrets.get("email_password", ""),
                     "sender_email": secrets.get("sender_email", ""),
                     "days_back": secrets.get("days_back", 1),
                 }
         except Exception:
             pass
-    return {"imap_server": "", "email_address": "", "sender_email": "", "days_back": 1}
+    return {"imap_server": "", "email_address": "", "email_password": "", "sender_email": "", "days_back": 1}
 
 def save_email_config(imap_server: str, email_address: str, sender_email: str, days_back: int, save_to_file: bool = False):
     if not save_to_file:

@@ -244,7 +244,7 @@ if 'email_config' not in st.session_state:
         secrets_obj = None
     st.session_state.email_config = load_email_config(secrets_obj)
 if 'email_password' not in st.session_state:
-    st.session_state.email_password = ""
+    st.session_state.email_password = st.session_state.get("email_config", {}).get("email_password", "")
 if 'email_check_results' not in st.session_state:
     st.session_state.email_check_results = None
 
@@ -842,8 +842,13 @@ with tab2:
             auto_detected = detect_imap_server(email_address)
             if auto_detected != default_imap:
                 imap_server = auto_detected
+        secrets_pw = saved_config.get("email_password", "")
+        if secrets_pw and not st.session_state.email_password:
+            st.session_state.email_password = secrets_pw
         email_password = st.text_input("パスワード", type="password", value=st.session_state.email_password, key="email_pass_input")
         st.session_state.email_password = email_password
+        if secrets_pw:
+            st.caption("🔑 パスワードはSecretsから自動取得済み")
         sender_email = st.text_input("送信者メール（フィルタ）", value=saved_config.get("sender_email", ""))
         days_back = st.number_input("何日前まで遡るか", min_value=1, max_value=30, value=saved_config.get("days_back", 1))
         save_settings = st.checkbox("設定を保存（パスワードは保存されません）", value=False)
