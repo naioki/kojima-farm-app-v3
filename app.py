@@ -1698,20 +1698,6 @@ def _render_parsed_data_editor():
                     st.warning("スプレッドシートIDを入力してください。")
         else:
             st.caption("💡 スプレッドシートへ追記するには .streamlit/secrets.toml に [gcp] を設定するか、GOOGLE_APPLICATION_CREDENTIALS を設定してください。")
-    st.divider()
-    if st.button("📋 ラベルを生成", type="primary", use_container_width=True, key="pdf_gen_tab1"):
-        if st.session_state.parsed_data:
-            try:
-                final_data = validate_and_fix_order_data(st.session_state.parsed_data)
-                labels = generate_labels_from_data(final_data, st.session_state.shipment_date)
-                st.session_state.labels = labels
-                if labels:
-                    st.success(f"✅ {len(labels)}個のラベルを生成しました！")
-                else:
-                    st.error("❌ ラベルを生成できませんでした。")
-            except Exception as e:
-                st.error(format_error_display(e, "ラベル生成"))
-                st.exception(e)
 
 # 表編集時は fragment 内だけ再実行し、全体の再描画を避けて高速に（Streamlit 1.35+）
 _fragment_decorator = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
@@ -1722,6 +1708,21 @@ if _fragment_decorator and st.session_state.parsed_data:
     _parsed_editor_fragment()
 elif st.session_state.parsed_data:
     _render_parsed_data_editor()
+
+if st.session_state.parsed_data:
+    st.divider()
+    if st.button("📋 ラベルを生成", type="primary", use_container_width=True, key="pdf_gen_tab1"):
+        try:
+            final_data = validate_and_fix_order_data(st.session_state.parsed_data)
+            labels = generate_labels_from_data(final_data, st.session_state.shipment_date)
+            st.session_state.labels = labels
+            if labels:
+                st.success(f"✅ {len(labels)}個のラベルを生成しました！")
+            else:
+                st.error("❌ ラベルを生成できませんでした。")
+        except Exception as e:
+            st.error(format_error_display(e, "ラベル生成"))
+            st.exception(e)
 
 if st.session_state.labels and st.session_state.parsed_data:
     st.markdown("---")
